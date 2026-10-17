@@ -2,10 +2,10 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:slide_show/l10n/app_localizations.dart';
+import 'package:steam_flow/l10n/app_localizations.dart';
 
 /// 展示用版本号（与 pubspec.yaml 的 version 保持一致，改版本时需同步）
-const String appVersionLabel = 'V1.3.3';
+const String appVersionLabel = 'V0.1.0';
 
 /// 帮助页：说明文档 / 关于 / 赞助
 ///
@@ -14,7 +14,7 @@ const String appVersionLabel = 'V1.3.3';
 class HelpScreen extends StatefulWidget {
   const HelpScreen({super.key});
 
-  static const String githubUrl = 'https://github.com/cyyssly/FrameFlow';
+  static const String githubUrl = 'https://github.com/cyyssly/SteamFlow';
   static const String sponsorUrl = 'https://ifdian.net/a/sly345678/plan';
 
   /// 宽度达到该值（且非手机端）时使用两栏布局

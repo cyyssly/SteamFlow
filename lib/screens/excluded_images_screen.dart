@@ -3,14 +3,14 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'package:slide_show/models/image_item.dart';
-import 'package:slide_show/providers/settings_provider.dart';
-import 'package:slide_show/services/directory_picker_service.dart';
-import 'package:slide_show/services/fullscreen_service.dart';
-import 'package:slide_show/services/image_scan_service.dart';
-import 'package:slide_show/services/media_store_service.dart';
-import 'package:slide_show/widgets/masonry_image_grid.dart';
-import 'package:slide_show/l10n/app_localizations.dart';
+import 'package:steam_flow/models/image_item.dart';
+import 'package:steam_flow/providers/settings_provider.dart';
+import 'package:steam_flow/services/directory_picker_service.dart';
+import 'package:steam_flow/services/fullscreen_service.dart';
+import 'package:steam_flow/services/image_scan_service.dart';
+import 'package:steam_flow/services/media_store_service.dart';
+import 'package:steam_flow/widgets/masonry_image_grid.dart';
+import 'package:steam_flow/l10n/app_localizations.dart';
 
 class ExcludedImagesScreen extends StatefulWidget {
   const ExcludedImagesScreen({super.key});
@@ -40,22 +40,18 @@ class _ExcludedImagesScreenState extends State<ExcludedImagesScreen> {
     super.dispose();
   }
 
-  /// 键盘快捷键：F11 切换全屏；全屏时按 ESC 退出全屏
+  /// 键盘快捷键：F11 切换全屏
   ///
   /// [HardwareKeyboard] 会无条件调用所有已注册的 handler，而播放页也注册了
-  /// F11/ESC，因此这里必须确认本页位于最上层，否则同一次按键会被两页各处理一次
+  /// F11，因此这里必须确认本页位于最上层，否则同一次按键会被两页各处理一次
   /// （先进全屏再退全屏，等于没反应）。
+  /// 全屏切换只由 F11 负责，ESC 不再具备退出全屏功能。
   bool _hardwareKeyHandler(KeyEvent event) {
     if (event is! KeyDownEvent) return false;
     if (ModalRoute.of(context)?.isCurrent != true) return false;
     final key = event.logicalKey;
     if (key == LogicalKeyboardKey.f11) {
       _toggleFullscreen();
-      return true;
-    }
-    if (key == LogicalKeyboardKey.escape &&
-        FullscreenService.instance.isFullscreen) {
-      FullscreenService.instance.exit();
       return true;
     }
     return false;

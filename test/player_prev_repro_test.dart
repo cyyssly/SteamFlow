@@ -6,11 +6,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:slide_show/l10n/app_localizations.dart';
-import 'package:slide_show/models/image_item.dart';
-import 'package:slide_show/providers/settings_provider.dart';
-import 'package:slide_show/providers/slide_provider.dart';
-import 'package:slide_show/screens/player_screen.dart';
+import 'package:steam_flow/l10n/app_localizations.dart';
+import 'package:steam_flow/models/image_item.dart';
+import 'package:steam_flow/providers/settings_provider.dart';
+import 'package:steam_flow/providers/slide_provider.dart';
+import 'package:steam_flow/screens/player_screen.dart';
 
 /// 复现：播放中“返回上一张”后图片显示“加载失败”。
 void main() {

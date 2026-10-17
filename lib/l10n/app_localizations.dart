@@ -67,9 +67,9 @@ class AppLocalizations {
 
   // ──────────── 翻译 ────────────
 
-  String get appName => _t('FrameFlow', 'FrameFlow', 'FrameFlow');
-  String get appTitle => 'FrameFlow';
-  String get homeTitle => 'FrameFlow';
+  String get appName => _t('SteamFlow', 'SteamFlow', 'SteamFlow');
+  String get appTitle => 'SteamFlow';
+  String get homeTitle => 'SteamFlow';
 
   // 首页
   String get startPlay => _t('开始播放', 'Start', '開始播放');
@@ -83,7 +83,7 @@ class AppLocalizations {
   String get selectFolderTitle => _t('选择文件夹', 'Folders', '選擇文件夾');
   String get addAlbum => _t('添加相册', 'Add Album', '添加相冊');
   String get addFolder => _t('添加文件夹', 'Add Folder', '添加文件夾');
-  String get clearAll => _t('清空全部', 'Clear All', '清空全部');
+  String get excludeAll => _t('全部排除', 'Exclude All', '全部排除');
   String get playFolder => _t('播放此文件夹', 'Play This Folder', '播放此資料夾');
   String get pleaseAddAlbum => _t('请添加相册', 'Add Albums', '請添加相冊');
   String get pleaseAddFolder => _t('请添加文件夹', 'Add Folders', '請添加文件夾');
@@ -203,6 +203,7 @@ class AppLocalizations {
   String get previous => _t('上一张', 'Previous', '上一張');
   String get next => _t('下一张', 'Next', '下一張');
   String get exitFullscreen => _t('退出全屏', 'Exit Fullscreen', '退出全屏');
+  String get exitPlayback => _t('退出播放', 'Exit Playback', '退出播放');
   String get enterFullscreen => _t('全屏', 'Fullscreen', '全屏');
   String get rotate => _t('旋转', 'Rotate', '旋轉');
   String get rotateRight => _t('向右旋转', 'Rotate Right', '向右旋轉');

@@ -1,9 +1,9 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
-import 'package:slide_show/models/image_item.dart';
-import 'package:slide_show/providers/settings_provider.dart';
-import 'package:slide_show/services/media_store_service.dart';
+import 'package:steam_flow/models/image_item.dart';
+import 'package:steam_flow/providers/settings_provider.dart';
+import 'package:steam_flow/services/media_store_service.dart';
 
 /// 图片扫描与元数据读取服务
 class ImageScanService {

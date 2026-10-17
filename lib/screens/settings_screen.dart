@@ -2,8 +2,8 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:slide_show/providers/settings_provider.dart';
-import 'package:slide_show/l10n/app_localizations.dart';
+import 'package:steam_flow/providers/settings_provider.dart';
+import 'package:steam_flow/l10n/app_localizations.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -788,7 +788,7 @@ class SettingsScreen extends StatelessWidget {
       ('↓', l10n.zoomOut),
       ('R', l10n.rotateRight),
       ('L', l10n.rotateLeft),
-      ('ESC', l10n.exitFullscreen),
+      ('ESC', l10n.exitPlayback),
       ('F11', l10n.toggleFullscreen),
       ('Del', l10n.deleteImage),
     ];

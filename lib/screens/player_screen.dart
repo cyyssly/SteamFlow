@@ -7,11 +7,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:image/image.dart' as img;
-import 'package:slide_show/providers/slide_provider.dart';
-import 'package:slide_show/providers/settings_provider.dart';
-import 'package:slide_show/l10n/app_localizations.dart';
-import 'package:slide_show/services/fullscreen_service.dart';
-import 'package:slide_show/utils/rotated_fit.dart';
+import 'package:steam_flow/providers/slide_provider.dart';
+import 'package:steam_flow/providers/settings_provider.dart';
+import 'package:steam_flow/l10n/app_localizations.dart';
+import 'package:steam_flow/services/fullscreen_service.dart';
+import 'package:steam_flow/utils/rotated_fit.dart';
 import 'package:vector_math/vector_math_64.dart' as vector;
 import 'package:wakelock_plus/wakelock_plus.dart';
 
@@ -59,11 +59,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// 工具栏一闪就消失、自动播放计时器被取消），表现为“按钮点了没反应”。
   Offset? _pointerDownPosition;
 
-  /// 顶部工具栏（AppBar）、底部按钮行、右下角缩放按钮的位置引用，
+  /// 顶部工具栏（AppBar）、底部按钮行的位置引用，
   /// 用于判断按下的落点是否在工具栏内（见 [_isPointOnToolbar]）。
   final GlobalKey _topControlsKey = GlobalKey();
   final GlobalKey _bottomControlsKey = GlobalKey();
-  final GlobalKey _zoomControlsKey = GlobalKey();
 
   /// 本轮交互中指尖漂移的最大距离（逻辑像素）。
   ///
@@ -663,14 +662,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _onAllPointersReleased();
   }
 
-  /// 判断某个全局坐标点是否落在工具栏（顶部 AppBar / 底部按钮行 /
-  /// 右下角缩放按钮）内。
+  /// 判断某个全局坐标点是否落在工具栏（顶部 AppBar / 底部按钮行）内。
   ///
   /// 用几何判定代替“在按钮之外再套一层 Listener 置标志位”：后者依赖
   /// 控件树中“按下/抬起”事件的先后顺序，一旦顺序变化就会失效；
   /// 而 [GlobalKey] + 命中矩形只取决于布局结果，与事件顺序无关。
   bool _isPointOnToolbar(Offset globalPosition) {
-    for (final key in [_topControlsKey, _bottomControlsKey, _zoomControlsKey]) {
+    for (final key in [_topControlsKey, _bottomControlsKey]) {
       final box = key.currentContext?.findRenderObject() as RenderBox?;
       if (box == null || !box.hasSize) continue;
       if ((box.localToGlobal(Offset.zero) & box.size).contains(
@@ -1233,12 +1231,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
           _zoomAt(_viewportCenter, 1 / _zoomStep);
           return true;
         case LogicalKeyboardKey.escape:
-          // 全屏时按 ESC 退出全屏；非全屏时按 ESC 退出播放
-          if (_isFullscreen) {
-            _exitFullscreen();
-          } else {
-            _exitPlayback();
-          }
+          // ESC 一次直接退出播放；全屏状态在页面销毁时一并恢复，
+          // 全屏切换统一交给 F11（ESC 不再负责退出全屏）
+          _exitPlayback();
           return true;
         case LogicalKeyboardKey.f11:
           if (_isFullscreen) {
@@ -1916,27 +1911,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
                               ),
                             ),
                           ),
-                        Positioned(
-                          top: 60,
-                          right: 16,
-                          child: Column(
-                            key: _zoomControlsKey,
-                            children: [
-                              if (_scale > _minScale)
-                                FloatingActionButton(
-                                  mini: true,
-                                  tooltip: AppLocalizations.of(
-                                    context,
-                                  ).fitScreen,
-                                  onPressed: _resetZoom,
-                                  child: const Icon(Icons.zoom_out),
-                                ),
-                            ],
-                          ),
-                        ),
                         // 全屏播放时鼠标应与工具栏同时隐藏、同时出现：
                         // 工具栏隐藏期间在最上层铺一层「不显示光标」的透明区域。
-                        // opaque:false 保证它不拦截下方控件（例如放大后的复位按钮）。
+                        // opaque:false 保证它不拦截下方控件。
                         if (!_showControls)
                           const MouseRegion(
                             cursor: SystemMouseCursors.none,

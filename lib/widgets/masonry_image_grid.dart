@@ -3,8 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/rendering.dart'
     show SliverGridLayout, SliverGridGeometry, SliverConstraints;
-import 'package:slide_show/models/image_item.dart';
-import 'package:slide_show/l10n/app_localizations.dart';
+import 'package:steam_flow/models/image_item.dart';
+import 'package:steam_flow/l10n/app_localizations.dart';
 
 /// 瀑布流网格组件：固定列宽，高度按图片宽高比自适应
 class MasonryImageGrid extends StatelessWidget {
@@ -293,6 +293,9 @@ class _MasonryImageCardState extends State<_MasonryImageCard> {
 
   @override
   Widget build(BuildContext context) {
+    // 悬停（桌面端）或选中（移动端点按）都只做「边框变色 + 显示操作图标」提示，
+    // 不再给图片加暗色遮罩，避免遮挡图片本身
+    final highlighted = _isHovered || widget.isSelected;
     return GestureDetector(
       onTap: widget.onTap,
       onLongPress: widget.onLongPress,
@@ -307,7 +310,7 @@ class _MasonryImageCardState extends State<_MasonryImageCard> {
           elevation: widget.isSelected ? 8 : 4,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(8),
-            side: widget.isSelected
+            side: highlighted
                 ? const BorderSide(color: Colors.orange, width: 2)
                 : BorderSide.none,
           ),
@@ -328,8 +331,8 @@ class _MasonryImageCardState extends State<_MasonryImageCard> {
                   height: double.infinity,
                   errorBuilder: (_, _, _) => const Icon(Icons.broken_image),
                 ),
-                // 悬停 或 选中 时显示覆盖层
-                if (_isHovered || widget.isSelected) _buildOverlay(context),
+                // 悬停 或 选中 时显示覆盖层（只有图标按钮，无暗色遮罩）
+                if (highlighted) _buildOverlay(context),
               ],
             ),
           ),
@@ -345,7 +348,6 @@ class _MasonryImageCardState extends State<_MasonryImageCard> {
     // 实际行为（排除播放 / 实际删除）由调用方按当前设置决定。
     if (widget.singleActionOverlay) {
       return Container(
-        color: Colors.black.withValues(alpha: 0.45),
         alignment: Alignment.bottomRight,
         padding: const EdgeInsets.all(8),
         child: _iconButton(
@@ -358,51 +360,48 @@ class _MasonryImageCardState extends State<_MasonryImageCard> {
     }
 
     // 四按钮模式：居中 2×2 布局（已排除图片页使用）
-    return Container(
-      color: Colors.black.withValues(alpha: 0.45),
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _iconButton(
-                  widget.primaryIcon!,
-                  widget.primaryColor!,
-                  widget.primaryTooltip!,
-                  widget.onPrimary!,
-                ),
-                const SizedBox(width: 8),
-                _iconButton(
-                  Icons.delete_outline,
-                  Colors.redAccent,
-                  loc.deleteImage,
-                  widget.onDelete,
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _iconButton(
-                  Icons.drive_file_move_outline,
-                  Colors.lightBlue,
-                  loc.moveTo,
-                  widget.onMove!,
-                ),
-                const SizedBox(width: 8),
-                _iconButton(
-                  Icons.content_copy,
-                  Colors.greenAccent,
-                  loc.copyTo,
-                  widget.onCopy!,
-                ),
-              ],
-            ),
-          ],
-        ),
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _iconButton(
+                widget.primaryIcon!,
+                widget.primaryColor!,
+                widget.primaryTooltip!,
+                widget.onPrimary!,
+              ),
+              const SizedBox(width: 8),
+              _iconButton(
+                Icons.delete_outline,
+                Colors.redAccent,
+                loc.deleteImage,
+                widget.onDelete,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _iconButton(
+                Icons.drive_file_move_outline,
+                Colors.lightBlue,
+                loc.moveTo,
+                widget.onMove!,
+              ),
+              const SizedBox(width: 8),
+              _iconButton(
+                Icons.content_copy,
+                Colors.greenAccent,
+                loc.copyTo,
+                widget.onCopy!,
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

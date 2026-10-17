@@ -63,7 +63,7 @@ class FullscreenService {
             IntPtr Function(Pointer<Utf16>, Pointer<Utf16>),
             int Function(Pointer<Utf16>, Pointer<Utf16>)
           >('FindWindowW');
-      hwnd = findWindowW(nullptr, 'FrameFlow'.toNativeUtf16());
+      hwnd = findWindowW(nullptr, 'SteamFlow'.toNativeUtf16());
     }
     return hwnd;
   }

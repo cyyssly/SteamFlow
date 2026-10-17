@@ -1,8 +1,8 @@
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
-import 'package:slide_show/models/image_item.dart';
-import 'package:slide_show/providers/settings_provider.dart';
+import 'package:steam_flow/models/image_item.dart';
+import 'package:steam_flow/providers/settings_provider.dart';
 
 class SlideProvider extends ChangeNotifier {
   List<ImageItem> _images = [];

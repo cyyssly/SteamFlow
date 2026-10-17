@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
-import 'package:slide_show/l10n/app_localizations.dart';
-import 'package:slide_show/providers/settings_provider.dart';
-import 'package:slide_show/screens/settings_screen.dart';
+import 'package:steam_flow/l10n/app_localizations.dart';
+import 'package:steam_flow/providers/settings_provider.dart';
+import 'package:steam_flow/screens/settings_screen.dart';
 
 /// 繁体中文必须带 `Hant` script，否则会被判成简体。
 const zhHant = Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hant');

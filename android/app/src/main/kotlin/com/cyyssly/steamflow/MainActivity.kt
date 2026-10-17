@@ -1,4 +1,4 @@
-package com.example.slide_show
+package com.cyyssly.steamflow
 
 import android.Manifest
 import android.app.Activity
@@ -22,7 +22,7 @@ import java.io.IOException
 import java.util.Locale
 
 class MainActivity : FlutterActivity() {
-    private val CHANNEL = "com.example.slide_show/media_store"
+    private val CHANNEL = "com.cyyssly.steamflow/media_store"
     private var pendingResult: MethodChannel.Result? = null
     private var pendingTrashResult: MethodChannel.Result? = null
 
@@ -79,7 +79,7 @@ class MainActivity : FlutterActivity() {
                 grantResults.any { it == PackageManager.PERMISSION_GRANTED }
             if (granted && !hasFullStoragePermission()) {
                 android.util.Log.w(
-                    "FrameFlow",
+                    "SteamFlow",
                     "requestStoragePermission: 仅获取到部分照片访问权限，结果可能不完整"
                 )
             }
@@ -153,7 +153,7 @@ class MainActivity : FlutterActivity() {
                     0
                 )
             } catch (e: Exception) {
-                android.util.Log.e("FrameFlow", "deleteToTrash failed: ${e.message}", e)
+                android.util.Log.e("SteamFlow", "deleteToTrash failed: ${e.message}", e)
                 // 失败时回退到直接删除
                 deleteFilesDirectly(paths)
                 result.success(true)
@@ -205,7 +205,7 @@ class MainActivity : FlutterActivity() {
                     file.delete()
                 }
             } catch (e: Exception) {
-                android.util.Log.e("FrameFlow", "delete file failed: $path: ${e.message}")
+                android.util.Log.e("SteamFlow", "delete file failed: $path: ${e.message}")
             }
         }
     }
@@ -268,7 +268,7 @@ class MainActivity : FlutterActivity() {
                     )
 
                     if (newDocUri == null) {
-                        android.util.Log.e("FrameFlow", "create doc failed for: $fileName")
+                        android.util.Log.e("SteamFlow", "create doc failed for: $fileName")
                         allOk = false
                         continue
                     }
@@ -283,18 +283,18 @@ class MainActivity : FlutterActivity() {
                         resolver.openOutputStream(newDocUri)?.use { outs ->
                             ins.copyTo(outs)
                         } ?: run {
-                            android.util.Log.e("FrameFlow", "open output failed for: $fileName")
+                            android.util.Log.e("SteamFlow", "open output failed for: $fileName")
                             allOk = false
                         }
                     }
                 } catch (e: Exception) {
-                    android.util.Log.e("FrameFlow", "copy file failed: $path: ${e.message}")
+                    android.util.Log.e("SteamFlow", "copy file failed: $path: ${e.message}")
                     allOk = false
                 }
             }
             return allOk
         } catch (e: Exception) {
-            android.util.Log.e("FrameFlow", "copyFilesToDestination failed: ${e.message}", e)
+            android.util.Log.e("SteamFlow", "copyFilesToDestination failed: ${e.message}", e)
             return false
         }
     }
@@ -319,7 +319,7 @@ class MainActivity : FlutterActivity() {
                 if (file.exists()) java.io.FileInputStream(file) else null
             }
         } catch (e: Exception) {
-            android.util.Log.e("FrameFlow", "open input stream failed: $path: ${e.message}")
+            android.util.Log.e("SteamFlow", "open input stream failed: $path: ${e.message}")
             null
         }
     }
@@ -340,26 +340,26 @@ class MainActivity : FlutterActivity() {
 
     private fun handleGetImageAlbums(result: MethodChannel.Result) {
         if (!hasStoragePermission()) {
-            android.util.Log.e("FrameFlow", "getImageAlbums: permission denied")
+            android.util.Log.e("SteamFlow", "getImageAlbums: permission denied")
             result.error("PERMISSION_DENIED", "没有读取图片的权限", null)
             return
         }
         if (hasPartialStoragePermission()) {
             // 部分权限下查询结果只是用户勾选的子集，记录日志便于区分原因
             android.util.Log.w(
-                "FrameFlow",
+                "SteamFlow",
                 "getImageAlbums: 仅有部分照片访问权限，结果可能不完整"
             )
         }
         try {
             val albums = queryImageAlbums()
-            android.util.Log.d("FrameFlow", "getImageAlbums: returning ${albums.size} albums")
+            android.util.Log.d("SteamFlow", "getImageAlbums: returning ${albums.size} albums")
             for (album in albums) {
-                android.util.Log.d("FrameFlow", "  album: ${album["name"]} path=${album["path"]} count=${album["imageCount"]}")
+                android.util.Log.d("SteamFlow", "  album: ${album["name"]} path=${album["path"]} count=${album["imageCount"]}")
             }
             result.success(albums)
         } catch (e: Exception) {
-            android.util.Log.e("FrameFlow", "getImageAlbums: query failed: ${e.message}", e)
+            android.util.Log.e("SteamFlow", "getImageAlbums: query failed: ${e.message}", e)
             result.error("QUERY_FAILED", "查询相册失败: ${e.message}", null)
         }
     }
@@ -411,7 +411,7 @@ class MainActivity : FlutterActivity() {
             val images = queryFolderImages(folderPath)
             result.success(images)
         } catch (e: Exception) {
-            android.util.Log.e("FrameFlow", "getFolderImages failed: ${e.message}", e)
+            android.util.Log.e("SteamFlow", "getFolderImages failed: ${e.message}", e)
             result.error("QUERY_FAILED", "查询文件夹图片失败: ${e.message}", null)
         }
     }
@@ -588,16 +588,16 @@ class MainActivity : FlutterActivity() {
                     }
                 }
             } catch (e: Exception) {
-                android.util.Log.w("FrameFlow", "getExternalVolumeNames failed: ${e.message}")
+                android.util.Log.w("SteamFlow", "getExternalVolumeNames failed: ${e.message}")
             }
-            android.util.Log.d("FrameFlow", "queryImageAlbums: querying ${volMap.size} volume(s): ${volMap.keys}")
+            android.util.Log.d("SteamFlow", "queryImageAlbums: querying ${volMap.size} volume(s): ${volMap.keys}")
             volMap.values.toList()
         } else {
             listOf(MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
         }
 
         for (collection in volumes) {
-            android.util.Log.d("FrameFlow", "queryImageAlbums: querying $collection")
+            android.util.Log.d("SteamFlow", "queryImageAlbums: querying $collection")
             val cursor = contentResolver.query(
                 collection,
                 projection,
@@ -629,7 +629,7 @@ class MainActivity : FlutterActivity() {
             }
         }
 
-        android.util.Log.d("FrameFlow", "queryImageAlbums: found ${albums.size} albums total")
+        android.util.Log.d("SteamFlow", "queryImageAlbums: found ${albums.size} albums total")
         albums.sortByDescending { it["imageCount"] as Int }
         return albums.filter { (it["imageCount"] as Int) > 0 }
     }

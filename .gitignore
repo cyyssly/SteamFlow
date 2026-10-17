@@ -4,8 +4,8 @@
 *.pyc
 *.swp
 # Build artifacts
-/FrameFlow.exe
-/FrameFlow.apk
+/SteamFlow.exe
+/SteamFlow.apk
 **/build/
 # Release distribution artifacts
 /release/

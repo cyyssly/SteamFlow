@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
-import 'package:slide_show/l10n/app_localizations.dart';
-import 'package:slide_show/providers/settings_provider.dart';
-import 'package:slide_show/screens/settings_screen.dart';
+import 'package:steam_flow/l10n/app_localizations.dart';
+import 'package:steam_flow/providers/settings_provider.dart';
+import 'package:steam_flow/screens/settings_screen.dart';
 
 void main() {
   /// 以指定窗口宽度渲染设置页。

@@ -3,7 +3,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:slide_show/utils/rotated_fit.dart';
+import 'package:steam_flow/utils/rotated_fit.dart';
 
 /// 同步返回固定尺寸图片的 [ImageProvider]。
 ///

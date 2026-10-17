@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:slide_show/models/image_item.dart';
-import 'package:slide_show/l10n/app_localizations.dart';
+import 'package:steam_flow/models/image_item.dart';
+import 'package:steam_flow/l10n/app_localizations.dart';
 
 class ImageGrid extends StatelessWidget {
   final List<ImageItem> images;

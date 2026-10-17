@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:slide_show/models/image_item.dart';
+import 'package:steam_flow/models/image_item.dart';
 
 class AlbumInfo {
   final String path;
@@ -18,7 +18,7 @@ class AlbumInfo {
 }
 
 class MediaStoreService {
-  static const _channel = MethodChannel('com.example.slide_show/media_store');
+  static const _channel = MethodChannel('com.cyyssly.steamflow/media_store');
 
   /// 查询设备上所有包含图片的相册（Android 专用）
   static Future<List<AlbumInfo>> getImageAlbums() async {

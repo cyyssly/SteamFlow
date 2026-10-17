@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
-import 'package:slide_show/screens/home_screen.dart';
-import 'package:slide_show/screens/help_screen.dart';
-import 'package:slide_show/screens/player_screen.dart';
-import 'package:slide_show/screens/settings_screen.dart';
-import 'package:slide_show/providers/slide_provider.dart';
-import 'package:slide_show/providers/settings_provider.dart';
-import 'package:slide_show/l10n/app_localizations.dart';
+import 'package:steam_flow/screens/home_screen.dart';
+import 'package:steam_flow/screens/help_screen.dart';
+import 'package:steam_flow/screens/player_screen.dart';
+import 'package:steam_flow/screens/settings_screen.dart';
+import 'package:steam_flow/providers/slide_provider.dart';
+import 'package:steam_flow/providers/settings_provider.dart';
+import 'package:steam_flow/l10n/app_localizations.dart';
 import 'dart:io';
 
 void main() async {
@@ -49,7 +49,7 @@ class MyApp extends StatelessWidget {
         : AppLanguage.values[settings.languageIndex].locale;
 
     return MaterialApp(
-      title: 'FrameFlow',
+      title: 'SteamFlow',
       debugShowCheckedModeBanner: false,
       locale: locale,
       localizationsDelegates: const [

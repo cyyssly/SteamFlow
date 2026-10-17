@@ -2,14 +2,14 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:slide_show/providers/slide_provider.dart';
-import 'package:slide_show/providers/settings_provider.dart';
-import 'package:slide_show/models/image_item.dart';
-import 'package:slide_show/screens/excluded_images_screen.dart';
-import 'package:slide_show/screens/folder_images_screen.dart';
-import 'package:slide_show/services/directory_picker_service.dart';
-import 'package:slide_show/services/media_store_service.dart';
-import 'package:slide_show/l10n/app_localizations.dart';
+import 'package:steam_flow/providers/slide_provider.dart';
+import 'package:steam_flow/providers/settings_provider.dart';
+import 'package:steam_flow/models/image_item.dart';
+import 'package:steam_flow/screens/excluded_images_screen.dart';
+import 'package:steam_flow/screens/folder_images_screen.dart';
+import 'package:steam_flow/services/directory_picker_service.dart';
+import 'package:steam_flow/services/media_store_service.dart';
+import 'package:steam_flow/l10n/app_localizations.dart';
 
 class FolderSelectionScreen extends StatefulWidget {
   const FolderSelectionScreen({super.key});
@@ -429,7 +429,8 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
     }
   }
 
-  void _clearAll() {
+  /// 全部排除：把已选文件夹全部移出播放列表
+  void _excludeAll() {
     final slideProvider = Provider.of<SlideProvider>(context, listen: false);
     final settingsProvider = Provider.of<SettingsProvider>(
       context,
@@ -905,7 +906,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
                     child: ElevatedButton(
                       onPressed: slideProvider.folderPaths.isEmpty
                           ? null
-                          : _clearAll,
+                          : _excludeAll,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFFd63031),
                         foregroundColor: Colors.white,
@@ -921,10 +922,10 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const Icon(Icons.clear, size: 24),
+                          const Icon(Icons.block, size: 24),
                           const SizedBox(width: 12),
                           Text(
-                            AppLocalizations.of(context).clearAll,
+                            AppLocalizations.of(context).excludeAll,
                             style: const TextStyle(fontSize: 18),
                           ),
                         ],

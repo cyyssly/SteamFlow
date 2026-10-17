@@ -1,4 +1,4 @@
-# Slide Show - 跨平台图片幻灯播放器
+# SteamFlow - 跨平台图片幻灯播放器
 
 一款基于 Flutter 开发的跨平台图片幻灯片播放器，支持 Windows、macOS、Linux、Android 和 iOS 平台。提供沉浸式的全屏图片浏览体验，支持中文（简体/繁体）与英文界面、多种播放模式、切换动画和丰富的自定义设置。本应用无广告，完全免费，可自由分享。
 
@@ -105,8 +105,8 @@
 
 ```bash
 # 1. 克隆项目
-git clone https://github.com/cyyssly/FrameFlow.git
-cd slide_show
+git clone https://github.com/cyyssly/SteamFlow.git
+cd SteamFlow
 
 # 2. 获取依赖
 flutter pub get
@@ -136,7 +136,7 @@ flutter build ios
 ### 项目结构
 
 ```
-slide_show/
+steam_flow/
 ├── lib/
 │   ├── main.dart                     # 应用入口
 │   ├── l10n/
