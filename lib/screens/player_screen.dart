@@ -1,12 +1,12 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
-import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 import 'package:provider/provider.dart';
-import 'package:image/image.dart' as img;
 import 'package:steam_flow/providers/slide_provider.dart';
 import 'package:steam_flow/providers/settings_provider.dart';
 import 'package:steam_flow/l10n/app_localizations.dart';
@@ -15,18 +15,8 @@ import 'package:steam_flow/utils/rotated_fit.dart';
 import 'package:vector_math/vector_math_64.dart' as vector;
 import 'package:wakelock_plus/wakelock_plus.dart';
 
-/// 在后台 isolate 中解码图片并取回原始像素尺寸。
-///
-/// 顶层函数才能作为 [compute] 的入口；返回 null 表示解码失败。
-Size? _decodeImageSize(Uint8List bytes) {
-  try {
-    final image = img.decodeImage(bytes);
-    if (image == null) return null;
-    return Size(image.width.toDouble(), image.height.toDouble());
-  } catch (_) {
-    return null;
-  }
-}
+/// 单指手势的轴向：横向 = 拖动进度，纵向 = 切换视频。
+enum _SwipeAxis { none, horizontal, vertical }
 
 class PlayerScreen extends StatefulWidget {
   const PlayerScreen({super.key});
@@ -35,8 +25,32 @@ class PlayerScreen extends StatefulWidget {
   State<PlayerScreen> createState() => _PlayerScreenState();
 }
 
-class _PlayerScreenState extends State<PlayerScreen> {
-  Timer? _autoPlayTimer;
+class _PlayerScreenState extends State<PlayerScreen>
+    with SingleTickerProviderStateMixin {
+  // ==================== 播放内核 ====================
+  late final Player _player;
+  late final VideoController _videoController;
+
+  /// 由播放器事件流维护的状态快照
+  bool _playing = false;
+  bool _buffering = false;
+  bool _completed = false;
+  Duration _videoPosition = Duration.zero;
+  Duration _videoDuration = Duration.zero;
+  int? _videoWidth;
+  int? _videoHeight;
+  String? _playbackError;
+
+  /// 进度拖拽（进度条或横向滑动）中的预览位置；非 null 时优先显示它
+  Duration? _seekPreview;
+
+  /// 播放器事件流订阅
+  final List<StreamSubscription<dynamic>> _playerSubs = [];
+
+  /// 切换动画由控制器驱动，避免用 [AnimatedSwitcher] 同时挂载两个 [Video]
+  /// （多个 [Video] 共用一个 [VideoController] 会互相抢占视频纹理）。
+  late final AnimationController _transitionController;
+
   bool _showControls = true;
   Timer? _hideControlsTimer;
   bool _showInfo = true;
@@ -82,7 +96,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// 取 kTouchSlop 同量级，与框架对“拖动”的认定保持一致。
   static const double _tapMoveSlop = 18.0;
 
-  // ---- 图片缩放/平移 ----
+  // ---- 视频缩放/平移 ----
   /// 最小缩放倍数（1.0 即“适应屏幕”）
   static const double _minScale = 1.0;
 
@@ -92,12 +106,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// 判定“已放大”的浮点容差
   static const double _zoomEpsilon = 0.01;
 
-  /// 松手切图阈值：拖到边缘后向外推超过该像素数，松开左键才切到上一张/下一张。
+  /// 松手切换阈值：拖到边缘后向外推超过该像素数，松开左键才切到上一个/下一个。
   /// 既避免“刚碰到边缘就被切走”，也避免轻微抖动误触发。
   static const double _edgeSwitchThreshold = 24.0;
-
-  /// 未放大时按滑动速度切换图片的阈值（逻辑像素/秒）
-  static const double _swipeVelocityThreshold = 50.0;
 
   double _scale = 1.0;
   double _rotation = 0.0;
@@ -113,21 +124,34 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// 视口中心由 [_viewportCenter] 计算得到。
   Size? _viewportSizeCache;
 
-  /// 单指拖拽已放大的图片时，累计的“超出边界”横向溢出量：
+  /// 单指拖拽已放大的视频时，累计的“超出边界”横向溢出量：
   /// 正值=顶在右侧边缘并继续往外推，负值=顶在左侧边缘并继续往外推。
   ///
-  /// 拖拽过程中不切图，只有松开左键时才据此判断是否切换上一张/下一张。
+  /// 拖拽过程中不切换，只有松开左键时才据此判断是否切换上一个/下一个。
   double _edgeOverflow = 0.0;
 
   /// 本次手势中是否出现过捏合（双指缩放）。
-  /// 用于在松手时区分“滑动切图”与“捏合缩放”，避免缩回原尺寸时误翻页。
+  /// 用于在松手时区分“滑动切换”与“捏合缩放”，避免缩回原尺寸时误切换。
   bool _gesturePinched = false;
 
-  /// 是否因为“放大查看”而暂停了自动播放。
-  ///
-  /// 与“用户主动暂停”区分开：前者在缩放回原尺寸后需要自动恢复播放，
-  /// 后者必须保持暂停。
-  bool _zoomSuspended = false;
+  // ---- 单指滑动（未放大时）----
+  /// 本轮手势的主轴；只在首次超过阈值时锁定一次，避免中途来回抖动。
+  _SwipeAxis _swipeAxis = _SwipeAxis.none;
+
+  /// 纵向滑动累计位移（逻辑像素，上负下正）
+  double _swipeDragDy = 0.0;
+
+  /// 横向滑动开始时的播放位置，用于在其基础上叠加拖动偏移。
+  Duration _seekStartPosition = Duration.zero;
+
+  /// 锁定主轴的位移阈值（逻辑像素）
+  static const double _axisLockSlop = 12.0;
+
+  /// 纵向滑动切换视频的位移阈值（逻辑像素）
+  static const double _swipeSwitchThreshold = 60.0;
+
+  /// 纵向滑动切换视频的速度阈值（逻辑像素/秒）
+  static const double _swipeSwitchVelocity = 300.0;
 
   /// 滚轮/键盘缩放的乘法步长（每次 ×[_zoomStep] 或 ÷[_zoomStep]）
   static const double _zoomStep = 1.1;
@@ -135,38 +159,42 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// 本轮交互是否用过右键（右键用于呼出小菜单，不应被当成“轻点画面”切换工具栏）
   bool _secondaryButtonUsed = false;
 
-  /// 当前图片的原始像素尺寸，用于计算平移边界
-  Size? _intrinsicSize;
-  int _intrinsicSizeForIndex = -1;
-  ImageStream? _intrinsicStream;
-  ImageStreamListener? _intrinsicListener;
+  /// 当前已打开媒体的路径，用于判断是否需要换片（null 表示尚未打开）
+  String? _openPath;
 
-  /// 包裹图片区域的 GestureDetector，用于取得真实视口尺寸
+  /// 包裹视频区域的 GestureDetector，用于取得真实视口尺寸
   final GlobalKey _gestureKey = GlobalKey();
 
   bool _wasPlayingBeforeDelete = false;
   bool _showDeleteMessage = false;
   String _deleteMessageText = '';
   double _autoRotation = 0.0;
-  int _lastProcessedIndex = -1;
 
-  /// 文件大小与分辨率缓存的加载中标记（防止重复请求）
+  /// 文件大小缓存的加载中标记（防止重复请求）
   final Set<String> _metaLoading = {};
 
-  // ---- 图片元信息缓存（避免在 build 中同步解码/读盘） ----
-  /// 缓存的文件大小与分辨率文本，键为图片路径。
-  /// 原先这两个信息在 build 里同步调用（含整张图片解码），
-  /// 触摸显示工具栏时会导致每帧解码一次 → 手势严重掉帧。
+  // ---- 视频元信息缓存（避免在 build 中同步读盘/解码） ----
+  /// 缓存的文件大小文本，键为视频路径。
+  /// 原先该信息在 build 里同步读盘，触摸显示工具栏时会导致每帧读盘 → 手势掉帧。
+  /// 分辨率不再需要缓存：播放器解码后可直接从事件流拿到宽高。
   final Map<String, String> _fileSizeCache = {};
-  final Map<String, String> _resolutionCache = {};
 
   // 记录最近一次已应用的运行时设置，用于检测设置变更并及时应用
-  int _lastInterval = -1;
-  ImageOrientation _lastOrientation = ImageOrientation.followSystem;
+  VideoOrientation _lastOrientation = VideoOrientation.followSystem;
   int _lastControlsHideDelay = -1;
   bool _lastHideToolbar = true;
   int _lastInfoHideDelay = -1;
   bool _lastInfoAutoHide = true;
+  bool _lastLoopPlay = false;
+
+  /// 当前视频的原始像素尺寸，用于计算平移边界与自动旋转。
+  /// 由播放器事件流（width/height）异步填充。
+  Size? get _intrinsicSize {
+    final w = _videoWidth;
+    final h = _videoHeight;
+    if (w == null || h == null || w <= 0 || h <= 0) return null;
+    return Size(w.toDouble(), h.toDouble());
+  }
 
   @override
   void initState() {
@@ -177,19 +205,29 @@ class _PlayerScreenState extends State<PlayerScreen> {
     // 播放时保持屏幕常亮，避免进入省电模式自动熄屏
     WakelockPlus.enable();
 
+    // 创建播放内核：Player 负责解码，VideoController 提供渲染纹理。
+    // MediaKit.ensureInitialized() 已在 main 中调用，此处可直接构造。
+    _player = Player();
+    _videoController = VideoController(_player);
+    _transitionController = AnimationController(vsync: this);
+    _listenPlayer();
+
     // 初始化最近一次设置快照，避免首帧误判为设置变更
-    _lastInterval = settings.interval;
-    _lastOrientation = settings.imageOrientation;
+    _lastOrientation = settings.videoOrientation;
     _lastControlsHideDelay = settings.controlsHideDelay;
     _lastHideToolbar = settings.hideToolbar;
     _lastInfoHideDelay = settings.infoHideDelay;
     _lastInfoAutoHide = settings.infoAutoHide;
+    _lastLoopPlay = settings.loopPlay;
 
     // 注册全局键盘监听器，不依赖 FocusNode
     HardwareKeyboard.instance.addHandler(_hardwareKeyHandler);
 
+    // 播放列表变化（换片 / 播放/暂停意图变化）时同步播放器
+    slideProvider.addListener(_onSlideChanged);
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      // 请求焦点以接收键盘事件
+      if (!mounted) return;
 
       // 如果设置了自动全屏，先进入全屏再开始播放。
       // 手机端应用本身就是独占全屏的，不存在窗口化的「全屏」概念，
@@ -199,19 +237,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
       if (startFullscreen) {
         // 延迟更长时间再进入全屏，确保窗口完全就绪
         Future.delayed(const Duration(milliseconds: 300), () {
+          if (!mounted) return;
           _enterFullscreen();
-
-          // 全屏后再延迟一小段时间启动自动播放，确保窗口状态稳定
-          Future.delayed(const Duration(milliseconds: 100), () {
-            if (slideProvider.isPlaying && slideProvider.images.isNotEmpty) {
-              _startAutoPlay();
-            }
-          });
         });
-      } else if (slideProvider.isPlaying && slideProvider.images.isNotEmpty) {
-        // 如果正处于播放状态，启动自动播放定时器
-        _startAutoPlay();
       }
+
+      // 打开当前视频（播放状态由 SlideProvider 的播放意图决定）
+      _openCurrentVideo();
 
       // 应用屏幕方向设置
       _applyScreenOrientation(settings);
@@ -222,63 +254,163 @@ class _PlayerScreenState extends State<PlayerScreen> {
     });
   }
 
-  @override
-  void didUpdateWidget(covariant PlayerScreen oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // 避免每次更新都重启定时器
+  /// 订阅播放器事件流，把原生播放状态映射到本页面的状态快照。
+  void _listenPlayer() {
+    final stream = _player.stream;
+    _playerSubs
+      ..add(stream.playing.listen(_onPlayingChanged))
+      ..add(
+        stream.buffering.listen((value) {
+          if (mounted) setState(() => _buffering = value);
+        }),
+      )
+      ..add(stream.completed.listen(_onCompletedChanged))
+      ..add(
+        stream.position.listen((value) {
+          if (mounted) setState(() => _videoPosition = value);
+        }),
+      )
+      ..add(
+        stream.duration.listen((value) {
+          if (mounted) setState(() => _videoDuration = value);
+        }),
+      )
+      ..add(stream.width.listen((value) => _onVideoSizeChanged(value, null)))
+      ..add(stream.height.listen((value) => _onVideoSizeChanged(null, value)))
+      ..add(
+        stream.error.listen((value) {
+          if (mounted) setState(() => _playbackError = value);
+        }),
+      );
   }
 
-  /// 检测设置变更并将运行时效果（轮播间隔、屏幕方向、自动隐藏等）即时应用。
-  /// 由于 build 中不能调用 setState，将真正应用动作延迟到本次 build 完成后执行。
-  void _applySettingsToPlayback(SettingsProvider settings) {
-    final intervalChanged = settings.interval != _lastInterval;
-    final orientationChanged = settings.imageOrientation != _lastOrientation;
-    final controlsChanged =
-        settings.controlsHideDelay != _lastControlsHideDelay ||
-        settings.hideToolbar != _lastHideToolbar;
-    final infoChanged =
-        settings.infoHideDelay != _lastInfoHideDelay ||
-        settings.infoAutoHide != _lastInfoAutoHide;
+  void _onPlayingChanged(bool playing) {
+    if (!mounted) return;
+    setState(() => _playing = playing);
+  }
 
-    _lastInterval = settings.interval;
-    _lastOrientation = settings.imageOrientation;
-    _lastControlsHideDelay = settings.controlsHideDelay;
-    _lastHideToolbar = settings.hideToolbar;
-    _lastInfoHideDelay = settings.infoHideDelay;
-    _lastInfoAutoHide = settings.infoAutoHide;
-
-    if (!intervalChanged &&
-        !orientationChanged &&
-        !controlsChanged &&
-        !infoChanged) {
+  /// 播放结束事件：循环播放由播放器自身完成；否则自动连播下一个视频。
+  void _onCompletedChanged(bool completed) {
+    if (!mounted) return;
+    if (!completed) {
+      if (_completed) setState(() => _completed = false);
       return;
     }
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
+    if (settings.loopPlay) return; // PlaylistMode.single 会自行重播
+    setState(() => _completed = true);
+    // 保留播放意图，切换到下一个视频后自动继续播放
+    _nextVideo();
+  }
 
-    // 延迟到 build 完成后应用，避免 build 中调用 setState
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      if (intervalChanged) {
-        _startAutoPlay();
-      }
-      if (orientationChanged) {
-        _applyScreenOrientation(settings);
-      }
-      if (controlsChanged) {
-        _hideControlsDelayed();
-      }
-      if (infoChanged) {
-        _hideInfoDelayed();
-      }
+  /// 播放器解码出视频尺寸后，重算自动旋转与平移边界。
+  void _onVideoSizeChanged(int? width, int? height) {
+    if (!mounted) return;
+    final newWidth = width ?? _videoWidth;
+    final newHeight = height ?? _videoHeight;
+    if (newWidth == _videoWidth && newHeight == _videoHeight) return;
+
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
+    final slideProvider = Provider.of<SlideProvider>(context, listen: false);
+    setState(() {
+      _videoWidth = newWidth;
+      _videoHeight = newHeight;
+      _autoRotation = _computeAutoRotation(slideProvider, settings);
+      _position = _clampCurrent(settings);
     });
+  }
+
+  /// 播放列表变化时的处理：换片则重新打开，否则只同步播放/暂停。
+  void _onSlideChanged() {
+    if (!mounted) return;
+    final slideProvider = Provider.of<SlideProvider>(context, listen: false);
+    if (slideProvider.videos.isEmpty) return;
+    final path = slideProvider.videos[slideProvider.currentIndex].path;
+    if (path != _openPath) {
+      _openCurrentVideo();
+    } else {
+      _syncPlayState();
+    }
+  }
+
+  /// 打开当前索引对应的视频。
+  void _openCurrentVideo() {
+    final slideProvider = Provider.of<SlideProvider>(context, listen: false);
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
+    if (slideProvider.videos.isEmpty) return;
+
+    final index = slideProvider.currentIndex;
+    final video = slideProvider.videos[index];
+    if (video.path == _openPath) return;
+
+    _openPath = video.path;
+
+    final durationMs = (settings.animationDuration * 1000).round();
+    _transitionController.duration = Duration(milliseconds: durationMs);
+
+    setState(() {
+      _completed = false;
+      _buffering = false;
+      _playbackError = null;
+      _videoPosition = Duration.zero;
+      _videoDuration = Duration.zero;
+      _videoWidth = null;
+      _videoHeight = null;
+      _seekPreview = null;
+      _autoRotation = 0.0;
+      // 换片后回到「适应屏幕」，避免新视频带着上一个的缩放/位移
+      _scale = _minScale;
+      _rotation = 0.0;
+      _position = Offset.zero;
+      _edgeOverflow = 0.0;
+    });
+
+    _applyPlaylistMode(settings);
+    unawaited(_player.open(Media(video.path), play: slideProvider.isPlaying));
+
+    if (settings.transitionAnimation == TransitionAnimation.none) {
+      _transitionController.value = 1.0;
+    } else {
+      _transitionController.forward(from: 0);
+    }
+
+    _applyScreenOrientation(settings);
+  }
+
+  /// 把「循环播放」设置映射为播放器自身的循环模式。
+  void _applyPlaylistMode(SettingsProvider settings) {
+    _player.setPlaylistMode(
+      settings.loopPlay ? PlaylistMode.single : PlaylistMode.none,
+    );
+  }
+
+  /// 让实际播放状态与 [SlideProvider] 的播放意图保持一致。
+  void _syncPlayState() {
+    final slideProvider = Provider.of<SlideProvider>(context, listen: false);
+    if (slideProvider.isPlaying && !_playing && !_completed) {
+      _player.play();
+    } else if (!slideProvider.isPlaying && _playing) {
+      _player.pause();
+    }
   }
 
   @override
   void dispose() {
-    _autoPlayTimer?.cancel();
+    for (final sub in _playerSubs) {
+      sub.cancel();
+    }
+    _playerSubs.clear();
+    Provider.of<SlideProvider>(
+      context,
+      listen: false,
+    ).removeListener(_onSlideChanged);
+
     _hideControlsTimer?.cancel();
     _hideInfoTimer?.cancel();
-    // 释放用于读取图片尺寸的图片流监听
-    _detachIntrinsicSizeListener();
+
+    _transitionController.dispose();
+    _player.dispose();
+
     // 移除全局键盘监听器
     HardwareKeyboard.instance.removeHandler(_hardwareKeyHandler);
 
@@ -295,6 +427,58 @@ class _PlayerScreenState extends State<PlayerScreen> {
     super.dispose();
   }
 
+  /// 检测设置变更并将运行时效果（屏幕方向、自动隐藏、循环模式等）即时应用。
+  /// 由于 build 中不能调用 setState，将真正应用动作延迟到本次 build 完成后执行。
+  void _applySettingsToPlayback(SettingsProvider settings) {
+    final orientationChanged = settings.videoOrientation != _lastOrientation;
+    final controlsChanged =
+        settings.controlsHideDelay != _lastControlsHideDelay ||
+        settings.hideToolbar != _lastHideToolbar;
+    final infoChanged =
+        settings.infoHideDelay != _lastInfoHideDelay ||
+        settings.infoAutoHide != _lastInfoAutoHide;
+    final loopChanged = settings.loopPlay != _lastLoopPlay;
+
+    _lastOrientation = settings.videoOrientation;
+    _lastControlsHideDelay = settings.controlsHideDelay;
+    _lastHideToolbar = settings.hideToolbar;
+    _lastInfoHideDelay = settings.infoHideDelay;
+    _lastInfoAutoHide = settings.infoAutoHide;
+    _lastLoopPlay = settings.loopPlay;
+
+    if (!orientationChanged &&
+        !controlsChanged &&
+        !infoChanged &&
+        !loopChanged) {
+      return;
+    }
+
+    // 延迟到 build 完成后应用，避免 build 中调用 setState
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (orientationChanged) {
+        _applyScreenOrientation(settings);
+        final slideProvider = Provider.of<SlideProvider>(
+          context,
+          listen: false,
+        );
+        setState(() {
+          _autoRotation = _computeAutoRotation(slideProvider, settings);
+          _position = _clampCurrent(settings);
+        });
+      }
+      if (controlsChanged) {
+        _hideControlsDelayed();
+      }
+      if (infoChanged) {
+        _hideInfoDelayed();
+      }
+      if (loopChanged) {
+        _applyPlaylistMode(settings);
+      }
+    });
+  }
+
   /// 暂停播放
   void _pausePlayback() {
     final slideProvider = Provider.of<SlideProvider>(context, listen: false);
@@ -303,7 +487,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (slideProvider.isPlaying) {
       slideProvider.stopPlay();
     }
-    _autoPlayTimer?.cancel();
   }
 
   /// 恢复播放
@@ -312,52 +495,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
     if (!_wasPlayingBeforeDelete) return;
 
     final slideProvider = Provider.of<SlideProvider>(context, listen: false);
-    if (!slideProvider.isPlaying && slideProvider.images.isNotEmpty) {
+    if (!slideProvider.isPlaying && slideProvider.videos.isNotEmpty) {
       slideProvider.startPlay();
-      _startAutoPlay();
     }
-  }
-
-  /// 显示播放完毕提示对话框
-  void _showPlaybackCompleteDialog() {
-    // 如果当前是全屏状态，先退出全屏再显示对话框
-    if (_isFullscreen) {
-      _exitFullscreen();
-      // 延迟一小段时间让窗口状态稳定后再显示对话框
-      Future.delayed(const Duration(milliseconds: 200), () {
-        _showPlaybackCompleteAlert();
-      });
-    } else {
-      _showPlaybackCompleteAlert();
-    }
-  }
-
-  /// 实际显示播放完毕提示对话框
-  void _showPlaybackCompleteAlert() {
-    if (!mounted) return;
-
-    showDialog(
-      context: context,
-      barrierDismissible: false, // 必须点击确认才能关闭
-      builder: (context) => AlertDialog(
-        title: Text(AppLocalizations.of(context).playbackComplete),
-        content: Text(AppLocalizations.of(context).allImagesPlayed),
-        actions: [
-          TextButton(
-            onPressed: () {
-              // 返回主界面
-              Navigator.pop(context); // 关闭对话框
-              Navigator.pop(context); // 返回主界面
-            },
-            child: Text(AppLocalizations.of(context).confirm),
-          ),
-        ],
-      ),
-    );
   }
 
   /// 处理删除操作
-  /// 删除当前图片。
+  /// 删除当前视频。
   /// [invertAction] 为 true 时执行与“删除行为”设置相反的动作（对应 Ctrl+Del）。
   void _showDeleteConfirmation({bool invertAction = false}) {
     final settings = Provider.of<SettingsProvider>(context, listen: false);
@@ -365,7 +509,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
     // 如果是排除播放，直接执行操作，不需要确认，也不需要退出全屏
     if (action == DeleteAction.exclude) {
-      _deleteCurrentImage(action);
+      _deleteCurrentVideo(action);
       return;
     }
 
@@ -388,7 +532,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
     final slideProvider = Provider.of<SlideProvider>(context, listen: false);
 
-    final currentImage = slideProvider.images[slideProvider.currentIndex];
+    final currentVideo = slideProvider.videos[slideProvider.currentIndex];
     final deleteActionText = action == DeleteAction.exclude
         ? AppLocalizations.of(context).excludeFromPlay
         : AppLocalizations.of(context).deleteFromDisk;
@@ -402,7 +546,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
               : AppLocalizations.of(context).confirmDelete,
         ),
         content: Text(
-          '${AppLocalizations.of(context).confirmDeleteMsg(deleteActionText)}\n\n${currentImage.name}',
+          '${AppLocalizations.of(context).confirmDeleteMsg(deleteActionText)}\n\n${currentVideo.name}',
         ),
         actions: [
           TextButton(
@@ -415,8 +559,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
           TextButton(
             onPressed: () async {
               Navigator.pop(context);
-              final imagesRemain = await _deleteCurrentImage(action);
-              if (imagesRemain) {
+              final videosRemain = await _deleteCurrentVideo(action);
+              if (videosRemain) {
                 _resumePlayback();
               }
             },
@@ -447,19 +591,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
     });
   }
 
-  /// 删除当前图片（[action] 为本次实际使用的删除行为）
-  /// 返回 true 表示图片列表不为空，false 表示图片列表为空且已返回主界面
-  Future<bool> _deleteCurrentImage(DeleteAction action) async {
+  /// 删除当前视频（[action] 为本次实际使用的删除行为）
+  /// 返回 true 表示视频列表不为空，false 表示视频列表为空且已返回主界面
+  Future<bool> _deleteCurrentVideo(DeleteAction action) async {
     final slideProvider = Provider.of<SlideProvider>(context, listen: false);
     final settings = Provider.of<SettingsProvider>(context, listen: false);
 
     final currentIndex = slideProvider.currentIndex;
-    final currentImage = slideProvider.images[currentIndex];
+    final currentVideo = slideProvider.videos[currentIndex];
 
     if (action == DeleteAction.delete) {
       // 实际删除文件
       try {
-        await File(currentImage.path).delete();
+        await File(currentVideo.path).delete();
       } catch (e) {
         // 文件删除失败，可能是文件被占用（使用自定义覆盖层，在全屏模式下也能显示）
         if (mounted) {
@@ -469,14 +613,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
       }
     } else if (action == DeleteAction.exclude) {
       // 排除播放：记录到已排除列表，供"选择文件夹"页面的"已排除的文件"使用
-      settings.addExcludedPath(currentImage.path);
+      settings.addExcludedPath(currentVideo.path);
     }
 
     // 从播放列表中移除
-    slideProvider.removeImage(currentIndex);
+    slideProvider.removeVideo(currentIndex);
 
-    // 如果图片列表为空，返回主界面
-    if (slideProvider.images.isEmpty) {
+    // 如果视频列表为空，返回主界面
+    if (slideProvider.videos.isEmpty) {
       if (mounted) {
         Navigator.pop(context);
       }
@@ -494,111 +638,34 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
   }
 
-  void _startAutoPlay() {
+  /// 切换到下一个视频。
+  void _nextVideo() {
     final slideProvider = Provider.of<SlideProvider>(context, listen: false);
     final settings = Provider.of<SettingsProvider>(context, listen: false);
 
-    _autoPlayTimer?.cancel();
-
-    // 根据当前播放状态启动或停止定时器
-    if (slideProvider.isPlaying && slideProvider.images.isNotEmpty) {
-      _autoPlayTimer = Timer.periodic(
-        Duration(milliseconds: settings.interval),
-        (_) => _nextImage(),
-      );
-    }
-  }
-
-  /// 切换下一张图片。
-  /// [manual] 为 true 表示由用户手动触发（键盘/滚轮/滑动/工具栏按钮），
-  /// 切换后需要重置自动播放计时器。
-  void _nextImage({bool manual = false}) {
-    final slideProvider = Provider.of<SlideProvider>(context, listen: false);
-
-    // 放大查看细节时不自动切图，避免用户正在看时被定时器切走
-    if (!manual && _isZoomed) return;
-
-    if (_scale != _minScale) {
-      setState(() {
-        _scale = _minScale;
-        _rotation = 0.0;
-        _position = Offset.zero;
-        _edgeOverflow = 0.0;
-        // 切图后回到原尺寸，不再需要“放大暂停”标记
-        _zoomSuspended = false;
-      });
-    }
-
-    final settings = Provider.of<SettingsProvider>(context, listen: false);
-    if (!settings.loopPlay) {
-      // 顺序/最新/最旧模式：检查是否到达最后一张图片
-      final isSequentialOrder =
-          settings.playOrder == PlayOrder.sequential ||
-          settings.playOrder == PlayOrder.reverseSequential ||
-          settings.playOrder == PlayOrder.newestFirst ||
-          settings.playOrder == PlayOrder.oldestFirst;
-      if (isSequentialOrder &&
-          slideProvider.currentIndex == slideProvider.images.length - 1) {
-        slideProvider.stopPlay();
-        _autoPlayTimer?.cancel();
-
-        // 检查 widget 是否还挂载，避免在已销毁后调用 showDialog
-        if (mounted) {
-          // 显示播放完毕提示，用户确认后返回主界面
-          _showPlaybackCompleteDialog();
-        }
-        return;
-      }
-
-      // 随机播放时，检查是否到达随机序列的最后一个位置
-      if (settings.playOrder == PlayOrder.random &&
-          slideProvider.isRandomPlaybackComplete()) {
-        slideProvider.stopPlay();
-        _autoPlayTimer?.cancel();
-
-        // 检查 widget 是否还挂载，避免在已销毁后调用 showDialog
-        if (mounted) {
-          // 显示播放完毕提示，用户确认后返回主界面
-          _showPlaybackCompleteDialog();
-        }
-        return;
-      }
-    }
+    // 切换后回到「适应屏幕」状态，避免新视频带着上一个的缩放/位移
+    _resetZoom();
 
     if (settings.playOrder == PlayOrder.random) {
       // 使用预打乱的随机序列进行播放
-      slideProvider.nextRandomImage();
+      slideProvider.nextRandomVideo();
     } else {
       // 顺序/最新优先/最旧优先统一使用顺序索引播放
-      slideProvider.nextImage();
-    }
-
-    // 手动切换后重置自动播放计时器，让下一张的等待时间从当前时刻重新计算
-    if (manual) {
-      _startAutoPlay();
+      slideProvider.nextVideo();
     }
   }
 
-  /// 手动切换到上一张图片（键盘/滚轮/滑动/工具栏按钮触发）。
-  /// 切换后重置自动播放计时器，让等待时间从当前时刻重新计算。
-  void _prevImage() {
+  /// 切换到上一个视频。
+  void _prevVideo() {
     final settings = Provider.of<SettingsProvider>(context, listen: false);
-    // 切图后回到「适应屏幕」状态，避免新图带着上一张的缩放/位移
-    if (_scale != _minScale) {
-      setState(() {
-        _scale = _minScale;
-        _rotation = 0.0;
-        _position = Offset.zero;
-        _edgeOverflow = 0.0;
-        // 切图后回到原尺寸，不再需要“放大暂停”标记
-        _zoomSuspended = false;
-      });
-    }
+
+    // 切换后回到「适应屏幕」状态，避免新视频带着上一个的缩放/位移
+    _resetZoom();
+
     Provider.of<SlideProvider>(
       context,
       listen: false,
-    ).prevImage(playOrder: settings.playOrder);
-    _startAutoPlay();
+    ).prevVideo(playOrder: settings.playOrder);
   }
 
   void _hideControlsDelayed() {
@@ -645,7 +712,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   /// 手指抬起：全部松开时结束手势状态。
   ///
-  /// 若本次只是“轻点”（没有位移、没有捏合、也没触发切图），
+  /// 若本次只是“轻点”（没有位移、没有捏合、也没触发切换），
   /// 就切换工具栏显隐——相当于把点击的切换逻辑
   /// 推迟到松手时，缩放时便不会弹出工具栏。
   void _handlePointerUp(PointerUpEvent event) {
@@ -686,7 +753,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final downPosition = _pointerDownPosition;
     _pointerDownPosition = null;
     // 仅“单指轻点”才切换工具栏：
-    // 双指捏合、有位移的拖动（含放大后的平移/松手切图）都不会走到这里切换工具栏。
+    // 双指捏合、有位移的拖动（含放大后的平移/松手切换）都不会走到这里切换工具栏。
     // 右键用于呼出小菜单，同样不能当成“轻点画面”。
     final isSingleTap =
         !_gestureMoved &&
@@ -697,7 +764,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       // 落在工具栏上的轻点属于“点按钮”，交给按钮自己的 onPressed 处理：
       // 只顺延自动隐藏计时，既不隐藏工具栏，也不取消自动播放计时器。
       // 注意不能用 _showControlsTemporarily()：那会把 _showInfo 也置为 true，
-      // 让“点按钮”意外带出图片信息栏。
+      // 让“点按钮”意外带出视频信息栏。
       if (downPosition != null && _isPointOnToolbar(downPosition)) {
         _hideControlsDelayed();
         _hideInfoDelayed();
@@ -724,7 +791,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   /// 只在手势确实已经结束（没有任何指针按下）时才隐藏工具栏。
   ///
-  /// 缩放大图时用户可能连续多次捏合/拖动，中途松手又立刻按下，
+  /// 放大画面时用户可能连续多次捏合/拖动，中途松手又立刻按下，
   /// 这里必须避免在两次手势之间把工具栏隐藏掉再弹回来。
   void _hideControlsIfIdle() {
     if (!mounted || _isGestureActive || _pointerCount > 0) return;
@@ -774,24 +841,26 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void _togglePlay() {
     final slideProvider = Provider.of<SlideProvider>(context, listen: false);
 
-    // 放大查看时自动播放已暂停，此时点击播放按钮表示“这张已经看完”：
-    // 由 _nextImage 复位缩放/旋转并直接切到下一张，而不是停在原图等换片时间
-    if (_zoomSuspended) {
-      _nextImage(manual: true);
+    // 播放已结束：点击播放表示从头重播
+    if (_completed) {
+      setState(() => _completed = false);
+      unawaited(_player.seek(Duration.zero));
+      if (slideProvider.isPlaying) {
+        unawaited(_player.play());
+      } else {
+        slideProvider.startPlay();
+      }
+      _hideControlsDelayed();
       return;
     }
 
-    slideProvider.togglePlay();
-
-    // 如果现在是播放状态，启动定时器；否则停止
     if (slideProvider.isPlaying) {
-      _startAutoPlay();
-      _hideControlsDelayed();
+      slideProvider.stopPlay();
     } else {
-      _autoPlayTimer?.cancel();
-      // 调用 _hideControlsDelayed() 来应用暂停时保持工具栏的逻辑
-      _hideControlsDelayed();
+      slideProvider.startPlay();
     }
+    // 播放/暂停由播放列表监听统一同步，这里只处理工具栏的自动隐藏
+    _hideControlsDelayed();
   }
 
   /// 全屏状态由 [FullscreenService] 统一维护（播放页与瀑布流浏览页共用）
@@ -842,9 +911,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// 统一归一化成整数圈数交给 [RotatedBox]，从根上避免累积误差。
   int get _quarterTurns => normalizeQuarterTurns(_totalRotation);
 
-  /// 图片在屏幕上显示的实际尺寸（未缩放）。
+  /// 视频在屏幕上显示的实际尺寸（未缩放）。
   ///
-  /// 图片用 `Transform(scale:)` 缩放，所以这里的返回值是“缩放前”的尺寸；
+  /// 视频用 `Transform(scale:)` 缩放，所以这里的返回值是“缩放前”的尺寸；
   /// 平移边界在 [_clamp] 里再乘以 [_scale]。
   ///
   /// 注意：旋转由 [RotatedBox] 在**布局阶段**完成，因此这里必须用
@@ -871,7 +940,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     return (scaled - viewportAxis) / 2;
   }
 
-  /// 把平移量限制在图片边界内
+  /// 把平移量限制在视频边界内
   ///
   /// [scale] 显式传入，避免与即将写入的 _scale 不同步。
   Offset _clamp(Offset raw, SettingsProvider settings, double scale) {
@@ -904,17 +973,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
     setState(() {
       _scale = newScale;
-      // 缩回原尺寸时平移量必须归零，否则整张图会偏离视口中心
+      // 缩回原尺寸时平移量必须归零，否则整个画面会偏离视口中心
       _position = zoomed ? _clamp(adjusted, settings, newScale) : Offset.zero;
     });
-    _syncAutoPlayWithZoom();
   }
 
   /// 恢复到“适应屏幕”（缩放 1.0、位置归零）。
   void _resetZoom() {
-    if (_scale <= _minScale + _zoomEpsilon &&
-        _position == Offset.zero &&
-        !_zoomSuspended) {
+    if (_scale <= _minScale + _zoomEpsilon && _position == Offset.zero) {
       return;
     }
     setState(() {
@@ -922,23 +988,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
       _position = Offset.zero;
       _edgeOverflow = 0.0;
     });
-    _syncAutoPlayWithZoom();
-  }
-
-  /// 让自动播放与缩放状态保持一致：
-  /// · 放大时暂停自动播放（避免用户正在看细节时被切走），并记录“因放大而暂停”；
-  /// · 缩回原尺寸后，若暂停是放大引起的，自动恢复播放。
-  void _syncAutoPlayWithZoom() {
-    final slideProvider = Provider.of<SlideProvider>(context, listen: false);
-    if (_isZoomed) {
-      if (slideProvider.isPlaying) {
-        _zoomSuspended = true;
-        _autoPlayTimer?.cancel();
-      }
-    } else if (_zoomSuspended) {
-      _zoomSuspended = false;
-      _startAutoPlay();
-    }
   }
 
   void _handleScaleStart(ScaleStartDetails details) {
@@ -955,10 +1004,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
     // 手指按住期间顺延自动隐藏计时，避免手势刚开始就被计时器弹出工具栏
     _deferControlHide();
 
-    // 每次手势开始都重置边缘溢出量：它只在“单指·已放大”的拖拽过程中重新累积，
-    // 否则双指捏合时的焦点位移会被误当成“继续向边缘拖拽”。
+    // 每次手势开始都重置边缘溢出量与滑动状态：
+    // 边缘溢出只在“单指·已放大”的拖拽过程中重新累积，
+    // 滑动主轴只在本次手势内确定一次。
     _edgeOverflow = 0.0;
     _gesturePinched = false;
+    _swipeAxis = _SwipeAxis.none;
+    _swipeDragDy = 0.0;
+    _seekStartPosition = _videoPosition;
     // 手势开始时基于当前缩放重新夹紧，保证起点合法
     _position = _clampCurrent(
       Provider.of<SettingsProvider>(context, listen: false),
@@ -978,59 +1031,96 @@ class _PlayerScreenState extends State<PlayerScreen> {
     final settings = Provider.of<SettingsProvider>(context, listen: false);
     // 换算成以视口中心为原点的坐标，缩放锚点计算会更直观
     final focal = details.localFocalPoint - _viewportCenter;
-
-    // 1) 缩放：以手势焦点为锚点，使焦点下的像素在缩放前后保持不动
-    final newScale = (_startScale * details.scale).clamp(_minScale, _maxScale);
-    final ratio = _startScale == 0 ? 1.0 : newScale / _startScale;
-
-    // 2) 平移：
-    //    - 缩放带来的分量用 ratio 推导（锚点=焦点）
-    //    - 指尖自身的位移（focal - _startFocal）直接叠加，
-    //      这样单指拖动时 details.scale 恒为 1.0、ratio 为 1，
-    //      平移量恰好等于手指位移，不会出现“拖动被缩放放大”的漂移。
     final drag = focal - _startFocal;
-    final position = _startPosition * ratio + focal - _startFocal * ratio;
 
     // 记录本次手势是否真的做过捏合，供松手时区分滑动与缩放
     if ((details.scale - 1.0).abs() >= 0.02) _gesturePinched = true;
 
-    final clamped = _clamp(position, settings, newScale);
-    setState(() {
-      _scale = newScale;
-      _position = clamped;
-    });
-    // 手势过程中就同步自动播放状态，让工具栏图标即时反映“因放大而暂停”
-    _syncAutoPlayWithZoom();
+    // ---- 已放大 / 捏合 / 多指：保持原有的缩放 + 平移逻辑 ----
+    if (_gesturePinched || _isZoomed || details.pointerCount > 1) {
+      // 1) 缩放：以手势焦点为锚点，使焦点下的像素在缩放前后保持不动
+      final newScale = (_startScale * details.scale).clamp(
+        _minScale,
+        _maxScale,
+      );
+      final ratio = _startScale == 0 ? 1.0 : newScale / _startScale;
 
-    // 3) 单指拖拽且已放大时，记录“顶到边缘后继续往外推”的溢出量。
-    //    这里只记录、不切图，真正的切换判断推迟到松开左键时（见 _handleScaleEnd），
-    //    避免图片刚碰到边缘就被切走。
-    //    用 details.scale 是否恒为 1.0 来判断“本次没有捏合意图”，
-    //    与双指缩放区分开，避免捏合时焦点位移被当成向边缘拖拽。
-    final isSinglePointerDrag =
-        details.pointerCount <= 1 && (details.scale - 1.0).abs() < 0.02;
-    if (!isSinglePointerDrag || !_isZoomed) {
-      _edgeOverflow = 0.0;
+      // 2) 平移：
+      //    - 缩放带来的分量用 ratio 推导（锚点=焦点）
+      //    - 指尖自身的位移（focal - _startFocal）直接叠加，
+      //      这样单指拖动时 details.scale 恒为 1.0、ratio 为 1，
+      //      平移量恰好等于手指位移，不会出现“拖动被缩放放大”的漂移。
+      final position = _startPosition * ratio + focal - _startFocal * ratio;
+      final clamped = _clamp(position, settings, newScale);
+      setState(() {
+        _scale = newScale;
+        _position = clamped;
+      });
+
+      // 3) 单指拖拽且已放大时，记录“顶到边缘后继续往外推”的溢出量。
+      //    这里只记录、不切换，真正的切换判断推迟到松开左键时（见 _handleScaleEnd），
+      //    避免视频刚碰到边缘就被切走。
+      final isSinglePointerDrag =
+          details.pointerCount <= 1 && (details.scale - 1.0).abs() < 0.02;
+      if (!isSinglePointerDrag || !_isZoomed) {
+        _edgeOverflow = 0.0;
+        return;
+      }
+      // 仅在横向意图明显时累积，避免竖向平移误触发切换
+      if (drag.dx.abs() <= drag.dy.abs()) {
+        _edgeOverflow = 0.0;
+        return;
+      }
+      // 目标位置被 _clamp 挡住后多出来的部分就是“顶到边缘”的溢出量：
+      // 正值=顶在右侧边缘继续右推，负值=顶在左侧边缘继续左推。
+      _edgeOverflow = position.dx - clamped.dx;
       return;
     }
 
-    // 仅在横向意图明显时累积，避免竖向平移误触发切换
-    if (drag.dx.abs() <= drag.dy.abs()) {
-      _edgeOverflow = 0.0;
-      return;
+    // ---- 未放大且单指：按手势主轴分派（横向=进度，纵向=切换） ----
+    if (_swipeAxis == _SwipeAxis.none) {
+      if (math.max(drag.dx.abs(), drag.dy.abs()) < _axisLockSlop) return;
+      _swipeAxis = drag.dx.abs() > drag.dy.abs()
+          ? _SwipeAxis.horizontal
+          : _SwipeAxis.vertical;
+      // 横向滑动开始：以当前播放位置为基准叠加拖动偏移
+      _seekStartPosition = _videoPosition;
     }
 
-    // 目标位置被 _clamp 挡住后多出来的部分就是“顶到边缘”的溢出量：
-    // 正值=顶在右侧边缘继续右推，负值=顶在左侧边缘继续左推。
-    _edgeOverflow = position.dx - clamped.dx;
+    if (_swipeAxis == _SwipeAxis.horizontal) {
+      _updateSeekPreview(drag.dx);
+    } else {
+      _swipeDragDy = drag.dy;
+    }
+  }
+
+  /// 根据横向拖动位移换算进度预览位置（不立即 seek，松手时才提交）。
+  void _updateSeekPreview(double dragDx) {
+    final duration = _videoDuration;
+    if (duration <= Duration.zero) return;
+    final viewportWidth = _viewportSize.width;
+    if (viewportWidth <= 0) return;
+
+    final deltaMs = (duration.inMilliseconds * (dragDx / viewportWidth))
+        .round();
+    final targetMs = (_seekStartPosition.inMilliseconds + deltaMs).clamp(
+      0,
+      duration.inMilliseconds,
+    );
+    final target = Duration(milliseconds: targetMs);
+    if (target == _seekPreview) return;
+    setState(() => _seekPreview = target);
   }
 
   void _handleScaleEnd(ScaleEndDetails details) {
     final settings = Provider.of<SettingsProvider>(context, listen: false);
     // 注意：这些标志必须在 setState 重置之前读出来
     final edgeOverflow = _edgeOverflow; // 松手时仍顶在边缘的溢出量
-    final wasPinching = _gesturePinched;
     final wasZoomed = _isZoomed;
+    final axis = _swipeAxis;
+    final swipeDy = _swipeDragDy;
+    final seekPreview = _seekPreview;
+    final velocity = details.velocity.pixelsPerSecond;
 
     setState(() {
       if (_scale <= _minScale + _zoomEpsilon) {
@@ -1042,134 +1132,62 @@ class _PlayerScreenState extends State<PlayerScreen> {
       }
       _edgeOverflow = 0.0;
       _gesturePinched = false;
+      _swipeAxis = _SwipeAxis.none;
+      _swipeDragDy = 0.0;
     });
 
-    // 正在放大查看细节时不要自动切走，缩回原尺寸后再恢复自动播放
-    if (_isZoomed) {
-      // 松手时仍顶在左右边缘、且向外推超过阈值 → 切换上一张/下一张。
-      // 拖拽过程中不切图，统一在松手这一刻判断，避免刚碰到边缘就被切走。
+    // ---- 已放大：保留“顶到边缘继续外推 → 切换”的交互 ----
+    if (wasZoomed) {
       if (edgeOverflow.abs() >= _edgeSwitchThreshold) {
         if (edgeOverflow > 0) {
-          // 顶在右侧边缘继续右推 → 上一张
-          _prevImage();
+          // 顶在右侧边缘继续右推 → 上一个
+          _prevVideo();
         } else {
-          // 顶在左侧边缘继续左推 → 下一张
-          _nextImage(manual: true);
+          // 顶在左侧边缘继续左推 → 下一个
+          _nextVideo();
         }
-        return;
       }
-
-      final slideProvider = Provider.of<SlideProvider>(context, listen: false);
-      // 记录“因放大而暂停”，缩回原尺寸后据此自动恢复（不覆盖用户的主动暂停）
-      _zoomSuspended = slideProvider.isPlaying;
-      _autoPlayTimer?.cancel();
-      return;
-    }
-    if (wasZoomed) {
-      _zoomSuspended = false;
-      _startAutoPlay();
-      // 刚缩回原尺寸的这一次松手不再顺带切图，避免缩小时误翻页
       return;
     }
 
-    // 以下情况不按速度切图：
-    //  · 本次手势是捏合缩放（缩回时的焦点速度不具备翻页意图）
-    if (wasPinching) return;
+    // ---- 横向滑动：提交进度跳转 ----
+    if (axis == _SwipeAxis.horizontal) {
+      setState(() => _seekPreview = null);
+      if (seekPreview != null) {
+        unawaited(_player.seek(seekPreview));
+      }
+      return;
+    }
 
-    // 未放大：按松手速度左右切换图片（等价于原来的横向拖拽手势）
-    final velocity = details.velocity.pixelsPerSecond;
-    if (velocity.dx.abs() <= velocity.dy.abs()) return; // 仅横向甩动才切图
-    if (velocity.dx > _swipeVelocityThreshold) {
-      _prevImage();
-    } else if (velocity.dx < -_swipeVelocityThreshold) {
-      _nextImage(manual: true);
+    // ---- 纵向滑动：上滑看下一个，下滑看上一个 ----
+    if (axis == _SwipeAxis.vertical) {
+      final swipedUp =
+          swipeDy <= -_swipeSwitchThreshold ||
+          velocity.dy <= -_swipeSwitchVelocity;
+      final swipedDown =
+          swipeDy >= _swipeSwitchThreshold ||
+          velocity.dy >= _swipeSwitchVelocity;
+      if (swipedUp) {
+        _nextVideo();
+      } else if (swipedDown) {
+        _prevVideo();
+      }
     }
   }
 
-  /// 为当前图片建立图片流监听，取得原始像素尺寸以计算平移边界
-  void _updateIntrinsicSize(int index, String path) {
-    if (_intrinsicSizeForIndex == index && _intrinsicSize != null) return;
-    if (_intrinsicSizeForIndex == index) return; // 已发起过请求，等待回调
-
-    _intrinsicSizeForIndex = index;
-    _intrinsicSize = null;
-    _detachIntrinsicSizeListener();
-
-    // 关键：使用与 Image.file 完全相同的 provider（字节相同 → 缓存键相同），
-    // 因此这里不会产生额外解码，只是复用已有的 ImageCache 条目。
-    final provider = FileImage(File(path));
-    late final ImageStreamListener listener;
-    listener = ImageStreamListener(
-      (info, synchronousCall) {
-        final size = Size(
-          info.image.width.toDouble(),
-          info.image.height.toDouble(),
-        );
-        // 监听器收到 ImageInfo 后由自己负责释放，否则每次切图都会泄漏一份解码位图
-        info.dispose();
-        if (!mounted || _intrinsicSizeForIndex != index) return;
-
-        void applyIntrinsicSize() {
-          if (!mounted || _intrinsicSizeForIndex != index) return;
-          setState(() {
-            _intrinsicSize = size;
-            // 尺寸拿到后按真实比例重新夹紧位置
-            _position = _clampCurrent(
-              Provider.of<SettingsProvider>(context, listen: false),
-            );
-            // 方向相关的自动旋转依赖图片尺寸，尺寸就绪后需要重算一次
-            _updateOrientationRotation(
-              Provider.of<SlideProvider>(context, listen: false),
-              Provider.of<SettingsProvider>(context, listen: false),
-            );
-          });
-        }
-
-        // 同步回调只可能在 addListener 时发生，而 _updateIntrinsicSize 是在 build 中调用的
-        // （图片已在缓存时即命中此路径）。此时直接 setState 会抛出
-        // “setState() called during build”，而该异常会被 ImageStreamCompleter 捕获后
-        // 广播给同一图片流上的所有监听者，导致同源的 Image 误判为加载失败并显示“图片加载失败”。
-        // 因此这里把状态更新推迟到当前帧结束之后。
-        if (synchronousCall) {
-          WidgetsBinding.instance.addPostFrameCallback(
-            (_) => applyIntrinsicSize(),
-          );
-        } else {
-          applyIntrinsicSize();
-        }
-      },
-      onError: (error, stackTrace) {
-        // 尺寸获取失败时保持未知，平移边界退化为“不可平移”
-      },
-    );
-    _intrinsicListener = listener;
-
-    final stream = provider.resolve(createLocalImageConfiguration(context));
-    _intrinsicStream = stream;
-    stream.addListener(listener);
-  }
-
-  void _detachIntrinsicSizeListener() {
-    if (_intrinsicStream != null && _intrinsicListener != null) {
-      _intrinsicStream!.removeListener(_intrinsicListener!);
-    }
-    _intrinsicStream = null;
-    _intrinsicListener = null;
-  }
-
-  void _rotateImage() {
+  void _rotateVideo() {
     setState(() {
       // 累加 90°；渲染时按整数圈数交给 RotatedBox，避免浮点误差累积。
       _rotation += math.pi / 2;
-      // 旋转后图片占据的屏幕区域变了，原平移量可能已经越界
+      // 旋转后视频占据的屏幕区域变了，原平移量可能已经越界
       _position = _clampCurrent(
         Provider.of<SettingsProvider>(context, listen: false),
       );
     });
   }
 
-  /// 向左旋转 90°（与 [_rotateImage] 方向相反）
-  void _rotateLeftImage() {
+  /// 向左旋转 90°（与 [_rotateVideo] 方向相反）
+  void _rotateLeftVideo() {
     setState(() {
       _rotation -= math.pi / 2;
       _position = _clampCurrent(
@@ -1178,11 +1196,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
     });
   }
 
-  /// 退出播放：停止自动播放、暂停播放并返回主界面
+  /// 退出播放：暂停播放并返回主界面
   void _exitPlayback() {
     final slideProvider = Provider.of<SlideProvider>(context, listen: false);
-    // 停止自动播放定时器
-    _autoPlayTimer?.cancel();
     // 如果正在播放，暂停播放
     if (slideProvider.isPlaying) {
       slideProvider.stopPlay();
@@ -1218,10 +1234,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
           _togglePlay();
           return true;
         case LogicalKeyboardKey.arrowLeft:
-          _prevImage();
+          _prevVideo();
           return true;
         case LogicalKeyboardKey.arrowRight:
-          _nextImage(manual: true);
+          _nextVideo();
           return true;
         case LogicalKeyboardKey.arrowUp:
           // 以视口中心为锚点放大
@@ -1249,10 +1265,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
           );
           return true;
         case LogicalKeyboardKey.keyR:
-          _rotateImage();
+          _rotateVideo();
           return true;
         case LogicalKeyboardKey.keyL:
-          _rotateLeftImage();
+          _rotateLeftVideo();
           return true;
         default:
           break;
@@ -1268,18 +1284,18 @@ class _PlayerScreenState extends State<PlayerScreen> {
       final modifierPressed =
           HardwareKeyboard.instance.isControlPressed ||
           HardwareKeyboard.instance.isShiftPressed;
-      final switchImage = modifierPressed
-          ? !settings.wheelSwitchImage
-          : settings.wheelSwitchImage;
-      if (switchImage) {
-        // 滚轮切换图片（不触发工具栏显示）
+      final switchVideo = modifierPressed
+          ? !settings.wheelSwitchVideo
+          : settings.wheelSwitchVideo;
+      if (switchVideo) {
+        // 滚轮切换视频（不触发工具栏显示）
         if (event.scrollDelta.dy > 0) {
-          _nextImage(manual: true);
+          _nextVideo();
         } else if (event.scrollDelta.dy < 0) {
-          _prevImage();
+          _prevVideo();
         }
       } else {
-        // 滚轮缩放图片：乘法步长 + 以光标为中心
+        // 滚轮缩放视频：乘法步长 + 以光标为中心
         final factor = event.scrollDelta.dy > 0 ? 1 / _zoomStep : _zoomStep;
         _zoomAt(event.localPosition, factor);
       }
@@ -1290,7 +1306,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   /// 右键呼出小菜单：放大 / 缩小 / 适应屏幕 / 旋转。
-  Future<void> _showImageContextMenu(Offset globalPosition) async {
+  Future<void> _showVideoContextMenu(Offset globalPosition) async {
     final l10n = AppLocalizations.of(context);
     final overlayBox =
         Overlay.of(context).context.findRenderObject() as RenderBox?;
@@ -1331,7 +1347,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         _resetZoom();
         break;
       case 'rotate':
-        _rotateImage();
+        _rotateVideo();
         break;
     }
   }
@@ -1342,37 +1358,29 @@ class _PlayerScreenState extends State<PlayerScreen> {
   String _fileSizeLabel(String path) {
     final cached = _fileSizeCache[path];
     if (cached != null) return cached;
-    unawaited(_loadImageMeta(path));
+    unawaited(_loadVideoMeta(path));
     return '…';
   }
 
-  /// 从缓存取分辨率文本；未缓存时返回占位符并触发异步加载。
-  String _resolutionLabel(String path) {
-    final cached = _resolutionCache[path];
-    if (cached != null) return cached;
-    unawaited(_loadImageMeta(path));
-    return '…';
+  /// 分辨率文本：解码尺寸由播放器事件流提供，未就绪时显示占位符。
+  String _resolutionLabel() {
+    final w = _videoWidth;
+    final h = _videoHeight;
+    if (w == null || h == null) return '…';
+    return '$w x $h';
   }
 
-  /// 只在磁盘上读取一次文件大小与图片分辨率，结果缓存起来。
-  ///
-  /// 解码放在后台 isolate（[compute]）中执行，避免阻塞手势帧。
-  Future<void> _loadImageMeta(String path) async {
+  /// 只在磁盘上读取一次文件大小，结果缓存起来。
+  Future<void> _loadVideoMeta(String path) async {
     if (_metaLoading.contains(path)) return;
-    if (_fileSizeCache.containsKey(path) &&
-        _resolutionCache.containsKey(path)) {
-      return;
-    }
+    if (_fileSizeCache.containsKey(path)) return;
     _metaLoading.add(path);
     final unknownText = AppLocalizations.of(context).unknown;
     try {
-      final file = File(path);
-      final sizeText = await _formatFileSize(file, unknownText);
-      final resolutionText = await _decodeResolution(file, unknownText);
+      final sizeText = await _formatFileSize(File(path), unknownText);
       if (!mounted) return;
       setState(() {
         _fileSizeCache[path] = sizeText;
-        _resolutionCache[path] = resolutionText;
       });
     } finally {
       _metaLoading.remove(path);
@@ -1390,76 +1398,56 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
   }
 
-  static Future<String> _decodeResolution(File file, String unknownText) async {
-    try {
-      final bytes = await file.readAsBytes();
-      final size = await compute(_decodeImageSize, bytes);
-      if (size == null) return unknownText;
-      return '${size.width} x ${size.height}';
-    } catch (_) {
-      return unknownText;
-    }
-  }
-
-  /// 根据图片方向设置，更新自动旋转角度
+  /// 根据视频方向设置计算自动旋转角度。
   ///
-  /// 依赖 [_intrinsicSize]（由图片流回调异步填充），不再同步解码文件。
-  void _updateOrientationRotation(
+  /// 依赖 [_intrinsicSize]（由播放器事件流异步填充），不做同步解码。
+  double _computeAutoRotation(
     SlideProvider slideProvider,
     SettingsProvider settings,
   ) {
-    if (slideProvider.images.isEmpty) return;
+    if (slideProvider.videos.isEmpty) return 0.0;
 
-    final imagePath = slideProvider.images[slideProvider.currentIndex].path;
-
-    switch (settings.imageOrientation) {
-      case ImageOrientation.landscape:
-        // 强制横屏：如果图片是竖屏的，旋转90°
-        _autoRotation = _isPortraitImage() ? math.pi / 2 : 0.0;
-        break;
-      case ImageOrientation.portrait:
-        // 强制竖屏：如果图片是横屏的，旋转90°
-        _autoRotation = _isLandscapeImage() ? math.pi / 2 : 0.0;
-        break;
-      case ImageOrientation.followSystem:
-        _autoRotation = 0.0;
-        break;
-      case ImageOrientation.followImage:
-        // 跟随图片：让图片的长边对齐屏幕长边
-        _autoRotation = _getRotationToMatchScreen(imagePath);
-        break;
+    switch (settings.videoOrientation) {
+      case VideoOrientation.landscape:
+        // 强制横屏：如果视频是竖屏的，旋转90°
+        return _isPortraitVideo() ? math.pi / 2 : 0.0;
+      case VideoOrientation.portrait:
+        // 强制竖屏：如果视频是横屏的，旋转90°
+        return _isLandscapeVideo() ? math.pi / 2 : 0.0;
+      case VideoOrientation.followSystem:
+        return 0.0;
+      case VideoOrientation.followVideo:
+        // 跟随视频：让视频的长边对齐屏幕长边
+        return _getRotationToMatchScreen();
     }
   }
 
-  /// 计算让图片长边对齐屏幕长边所需的旋转角度。
-  ///
-  /// 优先使用已缓存的原始尺寸（与缩放共用同一份数据），
-  /// 避免在此处同步读盘+解码。
-  double _getRotationToMatchScreen(String path) {
+  /// 计算让视频长边对齐屏幕长边所需的旋转角度。
+  double _getRotationToMatchScreen() {
     final intrinsic = _intrinsicSize;
-    if (intrinsic == null || _intrinsicSizeForIndex != _lastProcessedIndex) {
-      // 尺寸尚未就绪：先按不旋转处理，_updateIntrinsicSize 回调里会重新计算
+    if (intrinsic == null) {
+      // 尺寸尚未就绪：先按不旋转处理，尺寸到位后 [_onVideoSizeChanged] 会重算
       return 0.0;
     }
 
     final size = MediaQuery.of(context).size;
     final isScreenLandscape = size.width >= size.height;
-    final isImageLandscape = intrinsic.width >= intrinsic.height;
+    final isVideoLandscape = intrinsic.width >= intrinsic.height;
 
-    // 如果图片方向和屏幕方向不一致，旋转 90° 使长边对齐
-    if (isScreenLandscape != isImageLandscape) {
+    // 如果视频方向和屏幕方向不一致，旋转 90° 使长边对齐
+    if (isScreenLandscape != isVideoLandscape) {
       return math.pi / 2;
     }
     return 0.0;
   }
 
-  bool _isPortraitImage() {
+  bool _isPortraitVideo() {
     final intrinsic = _intrinsicSize;
     if (intrinsic == null) return false;
     return intrinsic.height > intrinsic.width;
   }
 
-  bool _isLandscapeImage() {
+  bool _isLandscapeVideo() {
     final intrinsic = _intrinsicSize;
     if (intrinsic == null) return false;
     return intrinsic.width > intrinsic.height;
@@ -1467,95 +1455,82 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   /// 根据设置锁定屏幕方向（移动端使用）
   void _applyScreenOrientation(SettingsProvider settings) {
-    switch (settings.imageOrientation) {
-      case ImageOrientation.landscape:
+    switch (settings.videoOrientation) {
+      case VideoOrientation.landscape:
         SystemChrome.setPreferredOrientations([
           DeviceOrientation.landscapeLeft,
           DeviceOrientation.landscapeRight,
         ]);
         break;
-      case ImageOrientation.portrait:
+      case VideoOrientation.portrait:
         SystemChrome.setPreferredOrientations([
           DeviceOrientation.portraitUp,
           DeviceOrientation.portraitDown,
         ]);
         break;
-      case ImageOrientation.followSystem:
-      case ImageOrientation.followImage:
+      case VideoOrientation.followSystem:
+      case VideoOrientation.followVideo:
         SystemChrome.setPreferredOrientations(DeviceOrientation.values);
         break;
     }
   }
 
-  Widget _buildTransitionAnimation(Widget child, int index) {
+  /// 用 [_transitionController] 驱动换片动画。
+  ///
+  /// 不使用 [AnimatedSwitcher]：多个 [Video] 共用一个 [VideoController]
+  /// 会互相抢占视频纹理，因此同一时刻只能挂载一个 [Video]，
+  /// 动画只能作用在这唯一的画面上。
+  Widget _buildTransitionAnimation(Widget child) {
     final settings = Provider.of<SettingsProvider>(context);
 
     switch (settings.transitionAnimation) {
       case TransitionAnimation.none:
         return child;
       case TransitionAnimation.fade:
-        return AnimatedSwitcher(
-          duration: Duration(
-            milliseconds: (settings.animationDuration * 1000).toInt(),
-          ),
-          transitionBuilder: (child, animation) =>
-              FadeTransition(opacity: animation, child: child),
-          child: child,
-        );
+        return FadeTransition(opacity: _transitionController, child: child);
       case TransitionAnimation.slideLeft:
-        return AnimatedSwitcher(
-          duration: Duration(
-            milliseconds: (settings.animationDuration * 1000).toInt(),
-          ),
-          transitionBuilder: (child, animation) => SlideTransition(
-            position: Tween<Offset>(
-              begin: const Offset(1, 0),
-              end: Offset.zero,
-            ).animate(animation),
-            child: child,
-          ),
+        return SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(1, 0),
+            end: Offset.zero,
+          ).animate(_transitionController),
           child: child,
         );
       case TransitionAnimation.slideUp:
-        return AnimatedSwitcher(
-          duration: Duration(
-            milliseconds: (settings.animationDuration * 1000).toInt(),
-          ),
-          transitionBuilder: (child, animation) => SlideTransition(
-            position: Tween<Offset>(
-              begin: const Offset(0, 1),
-              end: Offset.zero,
-            ).animate(animation),
-            child: child,
-          ),
+        return SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(0, 1),
+            end: Offset.zero,
+          ).animate(_transitionController),
           child: child,
         );
     }
+  }
+
+  /// 播放进度显示用的时间文本（不足一小时时省略小时位）。
+  String _formatDuration(Duration duration) {
+    final totalSeconds = duration.inSeconds;
+    final hours = totalSeconds ~/ 3600;
+    final minutes = (totalSeconds % 3600) ~/ 60;
+    final seconds = totalSeconds % 60;
+    String two(int value) => value.toString().padLeft(2, '0');
+    if (hours > 0) {
+      return '${two(hours)}:${two(minutes)}:${two(seconds)}';
+    }
+    return '${two(minutes)}:${two(seconds)}';
   }
 
   @override
   Widget build(BuildContext context) {
     return Consumer2<SlideProvider, SettingsProvider>(
       builder: (context, slideProvider, settings, child) {
-        // 检测设置变更并即时应用运行时效果（轮播间隔、方向、自动隐藏等）
+        // 检测设置变更并即时应用运行时效果（方向、自动隐藏、循环模式等）
         _applySettingsToPlayback(settings);
 
-        if (slideProvider.images.isEmpty) {
+        if (slideProvider.videos.isEmpty) {
           return Scaffold(
             backgroundColor: settings.background,
-            body: Center(child: Text(AppLocalizations.of(context).noImages)),
-          );
-        }
-
-        // 图片索引变化时更新方向旋转
-        if (slideProvider.currentIndex != _lastProcessedIndex) {
-          _lastProcessedIndex = slideProvider.currentIndex;
-          _updateOrientationRotation(slideProvider, settings);
-          _applyScreenOrientation(settings);
-          // 同步当前图片的原始尺寸，用于计算缩放后的平移边界
-          _updateIntrinsicSize(
-            slideProvider.currentIndex,
-            slideProvider.images[slideProvider.currentIndex].path,
+            body: Center(child: Text(AppLocalizations.of(context).noVideos)),
           );
         }
 
@@ -1590,7 +1565,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
               onPointerUp: _handlePointerUp,
               onPointerCancel: _handlePointerCancel,
               child: LayoutBuilder(
-                // 图片以 Stack 铺满整个 body，因此用它的约束尺寸作为
+                // 视频以 Stack 铺满整个 body，因此用它的约束尺寸作为
                 // 缩放/平移的视口尺寸，不再于 build 期间写入实例字段。
                 builder: (context, constraints) {
                   // 仅在约束有限且非空时缓存；写入实例字段不会触发重建
@@ -1611,20 +1586,20 @@ class _PlayerScreenState extends State<PlayerScreen> {
                     // 框架断言明确指出“scale 是 pan 的超集”，且拖拽的认定阈值
                     // （kTouchSlop 18）小于缩放的平移阈值（kPanSlop 36），
                     // 两者共存时单指拖动必被拖拽抢走、双指捏合也可能失效。
-                    // 统一交给缩放识别器：
-                    //   · 未放大 → 松手时按速度切图（见 _handleScaleEnd）
-                    //   · 放大后 → 单指拖动平移 + 靠泊后继续推出切图
+                    // 统一交给缩放识别器后，按主轴在代码里分派：
+                    //   · 未放大 + 横向 → 拖动进度条（见 _handleScaleUpdate/End）
+                    //   · 未放大 + 纵向 → 上滑下一个 / 下滑上一个
+                    //   · 已放大        → 单指拖动平移 + 顶到边缘继续外推切换
                     onScaleStart: _handleScaleStart,
                     onScaleUpdate: _handleScaleUpdate,
                     onScaleEnd: _handleScaleEnd,
                     onSecondaryTapUp: (details) =>
-                        _showImageContextMenu(details.globalPosition),
+                        _showVideoContextMenu(details.globalPosition),
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
                         _buildTransitionAnimation(
                           Transform(
-                            key: ValueKey(slideProvider.currentIndex),
                             alignment: Alignment.center,
                             // 顺序很重要：Matrix4 的方法是在右侧相乘，
                             // 因此 M = T · S。平移在最外层，_position 才是纯屏幕
@@ -1645,30 +1620,43 @@ class _PlayerScreenState extends State<PlayerScreen> {
                             child: SizedBox.expand(
                               child: RotatedBox(
                                 // 布局阶段旋转：RotatedBox 会把父级约束沿对角翻转
-                                // 后再交给图片适配，于是 contain 的短边能真正贴满
+                                // 后再交给视频适配，于是 contain 的短边能真正贴满
                                 // 屏幕短边（与 [_displayBaseSize] 的算法一致）。
                                 quarterTurns: _quarterTurns,
-                                child: Image.file(
-                                  File(
-                                    slideProvider
-                                        .images[slideProvider.currentIndex]
-                                        .path,
-                                  ),
+                                child: Video(
+                                  controller: _videoController,
                                   fit: settings.boxFit,
-                                  errorBuilder: (context, error, stackTrace) =>
-                                      Center(
-                                        child: Text(
-                                          AppLocalizations.of(
-                                            context,
-                                          ).imageLoadFailed,
-                                        ),
-                                      ),
+                                  fill: settings.background,
+                                  // 播放控制由本页自己的工具栏负责，
+                                  // 关闭 media_kit 自带控件避免重复。
+                                  controls: null,
+                                  // 常亮已由本页的 WakelockPlus 统一管理。
+                                  wakelock: false,
                                 ),
                               ),
                             ),
                           ),
-                          slideProvider.currentIndex,
                         ),
+                        // 播放错误提示（解码失败等）
+                        if (_playbackError != null)
+                          Center(
+                            child: Text(
+                              AppLocalizations.of(context).videoLoadFailed,
+                              style: const TextStyle(color: Colors.white70),
+                            ),
+                          ),
+                        // 缓冲中提示
+                        if (_buffering && _playbackError == null)
+                          const Center(
+                            child: SizedBox(
+                              width: 48,
+                              height: 48,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 3,
+                                color: Colors.white70,
+                              ),
+                            ),
+                          ),
                         if (_showControls)
                           Positioned(
                             top: 0,
@@ -1680,7 +1668,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                 alpha: 0.5,
                               ),
                               title: Text(
-                                '${slideProvider.currentIndex + 1} / ${slideProvider.images.length}',
+                                '${slideProvider.currentIndex + 1} / ${slideProvider.videos.length}',
                                 style: const TextStyle(fontSize: 16),
                               ),
                               leading: Tooltip(
@@ -1757,7 +1745,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                   message: AppLocalizations.of(context).rotate,
                                   child: IconButton(
                                     icon: const Icon(Icons.rotate_right),
-                                    onPressed: _rotateImage,
+                                    onPressed: _rotateVideo,
                                   ),
                                 ),
                                 Tooltip(
@@ -1785,7 +1773,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                               padding: const EdgeInsets.all(16),
                               child: Column(
                                 children: [
-                                  if (settings.showImageInfo && _showInfo)
+                                  if (settings.showVideoInfo && _showInfo)
                                     Padding(
                                       padding: const EdgeInsets.only(
                                         bottom: 12,
@@ -1798,7 +1786,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                           children: [
                                             Text(
                                               slideProvider
-                                                  .images[slideProvider
+                                                  .videos[slideProvider
                                                       .currentIndex]
                                                   .name,
                                               style: const TextStyle(
@@ -1811,7 +1799,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                             Text(
                                               _fileSizeLabel(
                                                 slideProvider
-                                                    .images[slideProvider
+                                                    .videos[slideProvider
                                                         .currentIndex]
                                                     .path,
                                               ),
@@ -1822,12 +1810,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                             ),
                                             const SizedBox(width: 16),
                                             Text(
-                                              _resolutionLabel(
-                                                slideProvider
-                                                    .images[slideProvider
-                                                        .currentIndex]
-                                                    .path,
-                                              ),
+                                              _resolutionLabel(),
                                               style: const TextStyle(
                                                 fontSize: 12,
                                                 color: Colors.grey,
@@ -1837,6 +1820,72 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                         ),
                                       ),
                                     ),
+                                  // 播放进度条：可拖拽跳转，也反映左右滑动的预览
+                                  Row(
+                                    children: [
+                                      Text(
+                                        _formatDuration(
+                                          _seekPreview ?? _videoPosition,
+                                        ),
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                      Expanded(
+                                        child: Slider(
+                                          value:
+                                              (_seekPreview ?? _videoPosition)
+                                                  .inMilliseconds
+                                                  .clamp(
+                                                    0,
+                                                    math.max(
+                                                      _videoDuration
+                                                          .inMilliseconds,
+                                                      1,
+                                                    ),
+                                                  )
+                                                  .toDouble(),
+                                          max: math
+                                              .max(
+                                                _videoDuration.inMilliseconds,
+                                                1,
+                                              )
+                                              .toDouble(),
+                                          onChanged: (value) {
+                                            if (_videoDuration <=
+                                                Duration.zero) {
+                                              return;
+                                            }
+                                            setState(
+                                              () => _seekPreview = Duration(
+                                                milliseconds: value.round(),
+                                              ),
+                                            );
+                                          },
+                                          // 拖动进度条时不要被自动隐藏计时打断
+                                          onChangeStart: (value) {
+                                            _hideControlsTimer?.cancel();
+                                          },
+                                          onChangeEnd: (value) {
+                                            final target = Duration(
+                                              milliseconds: value.round(),
+                                            );
+                                            setState(() => _seekPreview = null);
+                                            unawaited(_player.seek(target));
+                                            _hideControlsDelayed();
+                                          },
+                                        ),
+                                      ),
+                                      Text(
+                                        _formatDuration(_videoDuration),
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                   Row(
                                     key: _bottomControlsKey,
                                     mainAxisAlignment: MainAxisAlignment.center,
@@ -1848,17 +1897,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                         ),
                                         color: Colors.white,
                                         onPressed: () {
-                                          _prevImage();
+                                          _prevVideo();
                                           _showControlsTemporarily();
                                         },
                                       ),
                                       const SizedBox(width: 32),
                                       IconButton(
                                         icon: Icon(
-                                          // 放大查看时自动播放会被暂停，
-                                          // 此处应显示“暂停状态”的播放图标而非暂停图标
-                                          slideProvider.isPlaying &&
-                                                  !_zoomSuspended
+                                          // 播放完毕（或已暂停）时显示播放图标
+                                          slideProvider.isPlaying && !_completed
                                               ? Icons.pause_circle
                                               : Icons.play_circle,
                                           size: 64,
@@ -1874,13 +1921,39 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                         ),
                                         color: Colors.white,
                                         onPressed: () {
-                                          _nextImage(manual: true);
+                                          _nextVideo();
                                           _showControlsTemporarily();
                                         },
                                       ),
                                     ],
                                   ),
                                 ],
+                              ),
+                            ),
+                          ),
+                        // 横向滑动拖动进度时，居中显示预览时间
+                        // （工具栏隐藏时也能看到拖动反馈）
+                        if (_seekPreview != null)
+                          Positioned.fill(
+                            child: IgnorePointer(
+                              child: Center(
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 20,
+                                    vertical: 10,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withValues(alpha: 0.6),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    '${_formatDuration(_seekPreview!)} / ${_formatDuration(_videoDuration)}',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 18,
+                                    ),
+                                  ),
+                                ),
                               ),
                             ),
                           ),

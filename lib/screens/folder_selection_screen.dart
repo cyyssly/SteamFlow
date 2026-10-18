@@ -1,14 +1,14 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:steam_flow/providers/slide_provider.dart';
 import 'package:steam_flow/providers/settings_provider.dart';
-import 'package:steam_flow/models/image_item.dart';
-import 'package:steam_flow/screens/excluded_images_screen.dart';
-import 'package:steam_flow/screens/folder_images_screen.dart';
+import 'package:steam_flow/models/video_item.dart';
+import 'package:steam_flow/screens/excluded_videos_screen.dart';
+import 'package:steam_flow/screens/folder_videos_screen.dart';
 import 'package:steam_flow/services/directory_picker_service.dart';
 import 'package:steam_flow/services/media_store_service.dart';
+import 'package:steam_flow/services/video_thumbnail_service.dart';
 import 'package:steam_flow/l10n/app_localizations.dart';
 
 class FolderSelectionScreen extends StatefulWidget {
@@ -84,7 +84,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
         return;
       }
 
-      final albums = await MediaStoreService.getImageAlbums();
+      final albums = await MediaStoreService.getVideoAlbums();
       if (albums.isEmpty) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -148,7 +148,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
                       subtitle: Text(
                         AppLocalizations.of(
                           context,
-                        ).imagesCount(album.imageCount),
+                        ).videosCount(album.videoCount),
                         style: const TextStyle(
                           color: Colors.grey,
                           fontSize: 12,
@@ -205,7 +205,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
 
         // 计算新添加相册的统计信息
         for (final album in selectedAlbums) {
-          _countFolderImages(album.path);
+          _countFolderVideos(album.path);
         }
       }
     } else {
@@ -225,13 +225,13 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
         settingsProvider.setLastFolderPaths(slideProvider.folderPaths);
 
         // 计算新添加文件夹的统计信息
-        _countFolderImages(result);
+        _countFolderVideos(result);
       }
     }
   }
 
-  /// 计算文件夹中的图片数量和子文件夹数量
-  Future<void> _countFolderImages(String folderPath) async {
+  /// 计算文件夹中的视频数量和子文件夹数量
+  Future<void> _countFolderVideos(String folderPath) async {
     if (_scanningFolders.contains(folderPath)) return;
 
     setState(() {
@@ -244,29 +244,20 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
     );
 
     try {
-      const supportedExtensions = {
-        'jpg',
-        'jpeg',
-        'png',
-        'webp',
-        'bmp',
-        'gif',
-        'tiff',
-        'tif',
-      };
+      const supportedExtensions = {'mp4', 'm4v', 'mov', 'mkv', 'webm'};
 
-      int imageCount = 0;
+      int videoCount = 0;
       int subfolderCount = 0;
 
       if (Platform.isAndroid) {
         // Android 端通过 MediaStore 查询（绕过 Scoped Storage 限制）
-        final images = await MediaStoreService.getFolderImages(folderPath);
-        for (final item in images) {
+        final videos = await MediaStoreService.getFolderVideos(folderPath);
+        for (final item in videos) {
           final dotIndex = item.path.lastIndexOf('.');
           if (dotIndex != -1) {
             final ext = item.path.toLowerCase().substring(dotIndex + 1);
             if (supportedExtensions.contains(ext)) {
-              imageCount++;
+              videoCount++;
             }
           }
         }
@@ -278,7 +269,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
             if (dotIndex != -1) {
               final ext = entity.path.toLowerCase().substring(dotIndex + 1);
               if (supportedExtensions.contains(ext)) {
-                imageCount++;
+                videoCount++;
               }
             }
           } else if (entity is Directory) {
@@ -294,7 +285,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
             if (dotIndex != -1) {
               final ext = entity.path.toLowerCase().substring(dotIndex + 1);
               if (supportedExtensions.contains(ext)) {
-                imageCount++;
+                videoCount++;
               }
             }
           }
@@ -304,7 +295,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
       if (!mounted) return;
       setState(() {
         _folderStats[folderPath] = {
-          'imageCount': imageCount,
+          'videoCount': videoCount,
           'subfolderCount': subfolderCount,
         };
         _scanningFolders.remove(folderPath);
@@ -312,7 +303,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
     } catch (_) {
       if (!mounted) return;
       setState(() {
-        _folderStats[folderPath] = {'imageCount': 0, 'subfolderCount': 0};
+        _folderStats[folderPath] = {'videoCount': 0, 'subfolderCount': 0};
         _scanningFolders.remove(folderPath);
       });
     }
@@ -349,16 +340,16 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
       return const SizedBox.shrink();
     }
 
-    final imageCount = stats['imageCount'] ?? 0;
+    final videoCount = stats['videoCount'] ?? 0;
     final subfolderCount = stats['subfolderCount'] ?? 0;
 
     String countText;
     if (settingsProvider.recursiveScan) {
       countText = AppLocalizations.of(
         context,
-      ).folderContentCount(subfolderCount, imageCount);
+      ).folderContentCount(subfolderCount, videoCount);
     } else {
-      countText = AppLocalizations.of(context).filesCount(imageCount);
+      countText = AppLocalizations.of(context).filesCount(videoCount);
     }
 
     return Text(
@@ -385,7 +376,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
     });
   }
 
-  /// 直接播放某个已选文件夹：以该文件夹为播放范围进入幻灯
+  /// 直接播放某个已选文件夹：以该文件夹为播放范围进入播放
   Future<void> _playFolder(String path) async {
     if (_playingFolders.contains(path)) return;
     final slideProvider = Provider.of<SlideProvider>(context, listen: false);
@@ -399,12 +390,12 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
     });
 
     try {
-      final images = await _scanFolder(path, settingsProvider);
+      final videos = await _scanFolder(path, settingsProvider);
       if (!mounted) return;
-      if (images.isEmpty) {
+      if (videos.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(AppLocalizations.of(context).msgNoImages),
+            content: Text(AppLocalizations.of(context).msgNoVideos),
             backgroundColor: Colors.red,
             duration: const Duration(seconds: 3),
           ),
@@ -413,9 +404,9 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
       }
 
       // 与瀑布流页一致：范围限定为该文件夹，顺序按「播放顺序」设置
-      slideProvider.setImages(images, playOrder: settingsProvider.playOrder);
+      slideProvider.setVideos(videos, playOrder: settingsProvider.playOrder);
       slideProvider.sortByPlayOrder(settingsProvider.playOrder);
-      slideProvider.goToImage(0);
+      slideProvider.goToVideo(0);
       slideProvider.startPlay();
 
       if (!mounted) return;
@@ -451,7 +442,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
     final settings = Provider.of<SettingsProvider>(context, listen: false);
     final excludedCount = settings.excludedPaths.length;
     final loc = AppLocalizations.of(context);
-    // 找第一张仍然存在的已排除图片作为缩略图
+    // 找第一个仍然存在的已排除视频作为缩略图
     String? firstExcludedPath;
     for (final path in settings.excludedPaths) {
       if (File(path).existsSync()) {
@@ -469,7 +460,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
           width: 40,
           height: 40,
           child: firstExcludedPath != null
-              ? _ThumbnailImage(
+              ? _ThumbnailVideo(
                   key: ValueKey('thumb-excluded-$firstExcludedPath'),
                   thumbnailPath: firstExcludedPath,
                   albumPath: firstExcludedPath,
@@ -490,8 +481,8 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
       ),
       subtitle: Text(
         excludedCount > 0
-            ? loc.includesImages(excludedCount)
-            : loc.noExcludedImages,
+            ? loc.includesVideos(excludedCount)
+            : loc.noExcludedVideos,
         style: const TextStyle(fontSize: 12, color: Colors.grey),
       ),
       // 用与 IconButton 相同尺寸的容器包裹，保证与下方删除按钮竖向对齐
@@ -503,13 +494,13 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
       onTap: () {
         Navigator.push(
           context,
-          MaterialPageRoute(builder: (context) => const ExcludedImagesScreen()),
+          MaterialPageRoute(builder: (context) => const ExcludedVideosScreen()),
         );
       },
     );
   }
 
-  Future<void> _scanImages() async {
+  Future<void> _scanVideos() async {
     final slideProvider = Provider.of<SlideProvider>(context, listen: false);
     final settingsProvider = Provider.of<SettingsProvider>(
       context,
@@ -533,49 +524,49 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
 
     try {
       // 使用 Map 进行去重
-      final uniqueImages = <String, ImageItem>{};
+      final uniqueVideos = <String, VideoItem>{};
       bool hasStartedPlaying = false;
       int lastUpdateCount = 0;
 
       // 逐个扫描文件夹
       for (final folderPath in slideProvider.folderPaths) {
-        final images = await _scanFolder(folderPath, settingsProvider);
-        for (final image in images) {
-          if (!uniqueImages.containsKey(image.path)) {
-            uniqueImages[image.path] = image;
+        final videos = await _scanFolder(folderPath, settingsProvider);
+        for (final video in videos) {
+          if (!uniqueVideos.containsKey(video.path)) {
+            uniqueVideos[video.path] = video;
           }
 
-          // 每收集到10张新图片就更新一次列表（播放中）
+          // 每收集到10个新视频就更新一次列表（播放中）
           if (hasStartedPlaying &&
-              uniqueImages.length - lastUpdateCount >= 10) {
-            final newImages = uniqueImages.values.toList()
+              uniqueVideos.length - lastUpdateCount >= 10) {
+            final newVideos = uniqueVideos.values.toList()
               ..sort((a, b) => a.name.compareTo(b.name));
-            slideProvider.setImages(newImages);
-            lastUpdateCount = uniqueImages.length;
+            slideProvider.setVideos(newVideos);
+            lastUpdateCount = uniqueVideos.length;
           }
         }
 
-        // 如果已经收集到足够的图片且还未开始播放，则立即开始
-        if (!hasStartedPlaying && uniqueImages.length >= 10) {
+        // 如果已经收集到足够的视频且还未开始播放，则立即开始
+        if (!hasStartedPlaying && uniqueVideos.length >= 10) {
           await _startPlaybackEarly(
-            uniqueImages.values.toList(),
+            uniqueVideos.values.toList(),
             slideProvider,
             settingsProvider,
           );
           hasStartedPlaying = true;
-          lastUpdateCount = uniqueImages.length;
+          lastUpdateCount = uniqueVideos.length;
         }
       }
 
       // 按文件名排序
-      final sortedImages = uniqueImages.values.toList()
+      final sortedVideos = uniqueVideos.values.toList()
         ..sort((a, b) => a.name.compareTo(b.name));
 
-      if (sortedImages.isEmpty) {
+      if (sortedVideos.isEmpty) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(AppLocalizations.of(context).msgNoImages),
+            content: Text(AppLocalizations.of(context).msgNoVideos),
             backgroundColor: Colors.red,
             duration: const Duration(seconds: 3),
           ),
@@ -587,15 +578,15 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
       }
 
       if (!hasStartedPlaying) {
-        // 如果图片少于10张，直接设置并返回
-        slideProvider.setImages(sortedImages);
+        // 如果视频少于10个，直接设置并返回
+        slideProvider.setVideos(sortedVideos);
         settingsProvider.setLastFolderPaths(slideProvider.folderPaths);
 
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              AppLocalizations.of(context).msgScanComplete(sortedImages.length),
+              AppLocalizations.of(context).msgScanComplete(sortedVideos.length),
             ),
             backgroundColor: Colors.green,
             duration: const Duration(seconds: 3),
@@ -606,8 +597,8 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
         Navigator.pop(context);
       } else {
         // 已经在播放中，更新完整列表
-        if (sortedImages.length != lastUpdateCount) {
-          slideProvider.setImages(sortedImages);
+        if (sortedVideos.length != lastUpdateCount) {
+          slideProvider.setVideos(sortedVideos);
           settingsProvider.setLastFolderPaths(slideProvider.folderPaths);
         }
       }
@@ -630,19 +621,19 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
   }
 
   Future<void> _startPlaybackEarly(
-    List<ImageItem> images,
+    List<VideoItem> videos,
     SlideProvider slideProvider,
     SettingsProvider settingsProvider,
   ) async {
-    // 对已收集的图片进行排序
-    final sortedImages = images.toList()
+    // 对已收集的视频进行排序
+    final sortedVideos = videos.toList()
       ..sort((a, b) => a.name.compareTo(b.name));
 
-    slideProvider.setImages(sortedImages);
+    slideProvider.setVideos(sortedVideos);
     settingsProvider.setLastFolderPaths(slideProvider.folderPaths);
 
     // 开始播放
-    slideProvider.goToImage(0);
+    slideProvider.goToVideo(0);
     slideProvider.startPlay();
 
     if (mounted) {
@@ -650,26 +641,17 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
     }
   }
 
-  Future<List<ImageItem>> _scanFolder(
+  Future<List<VideoItem>> _scanFolder(
     String folderPath,
     SettingsProvider settings,
   ) async {
-    const supportedExtensions = {
-      'jpg',
-      'jpeg',
-      'png',
-      'webp',
-      'bmp',
-      'gif',
-      'tiff',
-      'tif',
-    };
+    const supportedExtensions = {'mp4', 'm4v', 'mov', 'mkv', 'webm'};
 
     // Android 端通过 MediaStore 查询（绕过 Scoped Storage 限制）
     if (Platform.isAndroid) {
-      // 直接透传 ImageItem，保留 MediaStore 已索引好的宽高比
-      final images = await MediaStoreService.getFolderImages(folderPath);
-      return images.where((item) {
+      // 直接透传 VideoItem，保留 MediaStore 已索引好的宽高比
+      final videos = await MediaStoreService.getFolderVideos(folderPath);
+      return videos.where((item) {
         final dotIndex = item.path.lastIndexOf('.');
         if (dotIndex == -1) return false;
         final ext = item.path.toLowerCase().substring(dotIndex + 1);
@@ -701,7 +683,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
           return supportedExtensions.contains(ext);
         })
         .map(
-          (file) => ImageItem(
+          (file) => VideoItem(
             name: file.path.split(Platform.pathSeparator).last,
             path: file.path,
           ),
@@ -724,7 +706,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
       );
       _previousRecursiveScan = settingsProvider.recursiveScan;
       for (final path in slideProvider.folderPaths) {
-        _countFolderImages(path);
+        _countFolderVideos(path);
       }
     });
   }
@@ -742,7 +724,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
         _folderStats.clear();
       });
       for (final path in slideProvider.folderPaths) {
-        _countFolderImages(path);
+        _countFolderVideos(path);
       }
     }
   }
@@ -795,7 +777,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
                     final path = slideProvider.folderPaths[folderIndex];
                     return ListTile(
                       // 使用稳定的 Key 绑定到文件夹路径，避免 ListView 按位置复用 State，
-                      // 导致缩略图组件残留上一个位置的图片
+                      // 导致缩略图组件残留上一个位置的视频
                       key: ValueKey('folder-$path'),
                       // 右侧边距缩小，让删除按钮更靠右，与左侧缩略图边距更平衡
                       contentPadding: const EdgeInsets.only(left: 16, right: 4),
@@ -804,7 +786,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
                         child: SizedBox(
                           width: 40,
                           height: 40,
-                          child: _ThumbnailImage(
+                          child: _ThumbnailVideo(
                             // 把 State 与所属文件夹绑定：即使 Element 被复用到其他
                             // 位置，Key 不一致也会让 Flutter 重建全新的 State，
                             // 不会残留上一个文件夹已加载的缩略图
@@ -822,7 +804,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
                         overflow: TextOverflow.ellipsis,
                       ),
                       subtitle: _buildFolderStats(path),
-                      // 播放：直接以该文件夹为范围进入幻灯；
+                      // 播放：直接以该文件夹为范围进入播放；
                       // 排除：把该文件夹移出播放列表（原「删除」按钮的动作）
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
@@ -861,7 +843,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
                           context,
                           MaterialPageRoute(
                             builder: (context) =>
-                                FolderImagesScreen(folderPath: path),
+                                FolderVideosScreen(folderPath: path),
                           ),
                         );
                       },
@@ -938,7 +920,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: _isScanning ? null : _scanImages,
+                  onPressed: _isScanning ? null : _scanVideos,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF00b894),
                     foregroundColor: Colors.white,
@@ -971,7 +953,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
     );
   }
 
-  /// 相册缩略图组件 - 从 MediaStore 或文件系统加载第一张图片作为缩略图
+  /// 相册缩略图组件 - 从 MediaStore 或文件系统加载第一个视频作为缩略图
   Widget _albumThumbnail({
     required String? thumbnailPath,
     required String albumPath,
@@ -981,7 +963,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
       child: SizedBox(
         width: 48,
         height: 48,
-        child: _ThumbnailImage(
+        child: _ThumbnailVideo(
           key: ValueKey('album-thumb-$albumPath-$thumbnailPath'),
           thumbnailPath: thumbnailPath,
           albumPath: albumPath,
@@ -992,38 +974,29 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
 }
 
 /// 异步加载缩略图的 StatefulWidget
-class _ThumbnailImage extends StatefulWidget {
+class _ThumbnailVideo extends StatefulWidget {
   final String? thumbnailPath;
   final String albumPath;
 
-  const _ThumbnailImage({
+  const _ThumbnailVideo({
     super.key,
     required this.thumbnailPath,
     required this.albumPath,
   });
 
   @override
-  State<_ThumbnailImage> createState() => _ThumbnailImageState();
+  State<_ThumbnailVideo> createState() => _ThumbnailVideoState();
 }
 
-class _ThumbnailImageState extends State<_ThumbnailImage> {
-  Uint8List? _imageBytes;
+class _ThumbnailVideoState extends State<_ThumbnailVideo> {
+  VideoThumbnail? _thumbnail;
   bool _loading = true;
 
   /// 每次发起加载时递增，用于识别“过期结果”。
   /// 只要这个值变了，就说明当前请求已不再是该 State 的最新请求。
   int _requestId = 0;
 
-  static const _supportedExtensions = {
-    'jpg',
-    'jpeg',
-    'png',
-    'webp',
-    'bmp',
-    'gif',
-    'tiff',
-    'tif',
-  };
+  static const _supportedExtensions = {'mp4', 'm4v', 'mov', 'mkv', 'webm'};
 
   @override
   void initState() {
@@ -1032,11 +1005,11 @@ class _ThumbnailImageState extends State<_ThumbnailImage> {
   }
 
   @override
-  void didUpdateWidget(covariant _ThumbnailImage oldWidget) {
+  void didUpdateWidget(covariant _ThumbnailVideo oldWidget) {
     super.didUpdateWidget(oldWidget);
     // 只要缩略图来源（缩略图路径或所属相册/文件夹路径）发生变化就要重新加载。
     // 否则 ListView 按位置复用 State 时，会残留上一个条目的缩略图，
-    // 导致所有文件夹都显示成同一张被排除的图片。
+    // 导致所有文件夹都显示成同一个被排除的视频首帧。
     if (oldWidget.thumbnailPath != widget.thumbnailPath ||
         oldWidget.albumPath != widget.albumPath) {
       _loadThumbnail();
@@ -1045,37 +1018,26 @@ class _ThumbnailImageState extends State<_ThumbnailImage> {
 
   Future<void> _loadThumbnail() async {
     final requestId = ++_requestId;
-    final requestAlbumPath = widget.albumPath;
-    final requestThumbnailPath = widget.thumbnailPath;
 
     setState(() {
       _loading = true;
-      // 必须清空旧图：否则下面的“优先读取缩略图，失败再回退到目录首图”
-      // 会因为 _imageBytes 非空而被跳过，直接把上一个文件夹的图片继续显示出来
-      _imageBytes = null;
+      // 必须清空旧图：否则下面的“优先取给定缩略图，失败再回退到目录首个视频”
+      // 会因为 _thumbnail 非空而被跳过，直接把上一个文件夹的缩略图继续显示出来
+      _thumbnail = null;
     });
 
     // 结果先写局部变量，只有确认请求仍然有效才提交到 State，
-    // 避免为文件夹 A 发起的读取把文件夹 B 的缩略图覆盖掉
-    Uint8List? bytes;
+    // 避免为文件夹 A 发起的取帧把文件夹 B 的缩略图覆盖掉
+    VideoThumbnail? thumbnail;
 
     try {
-      // 优先使用原生端返回的 content:// URI 或文件路径
-      if (requestThumbnailPath != null && requestThumbnailPath.isNotEmpty) {
-        if (requestThumbnailPath.startsWith('content://')) {
-          // 通过 MethodChannel 读取 content:// URI
-          bytes = await MediaStoreService.readImageBytes(requestThumbnailPath);
-        } else {
-          // 直接读取文件路径
-          final file = File(requestThumbnailPath);
-          if (await file.exists()) {
-            bytes = await file.readAsBytes();
-          }
-        }
+      final given = widget.thumbnailPath;
+      if (given != null && given.isNotEmpty) {
+        thumbnail = await VideoThumbnailService.thumbnailFor(given);
       }
-
-      // 如果缩略图加载失败，尝试从相册文件夹中找第一张图片
-      bytes ??= await _readFirstImageBytes(requestAlbumPath);
+      // 相册返回的缩略图路径可能是 content:// URI，取帧失败时
+      // 回退到该目录下的第一个视频
+      thumbnail ??= await _firstVideoThumbnail(widget.albumPath);
     } catch (_) {}
 
     // 如果在加载期间已发起了新的请求（widget 被复用指向其他文件夹），
@@ -1083,24 +1045,27 @@ class _ThumbnailImageState extends State<_ThumbnailImage> {
     if (!mounted || requestId != _requestId) return;
 
     setState(() {
-      _imageBytes = bytes;
+      _thumbnail = thumbnail;
       _loading = false;
     });
   }
 
-  /// 取文件夹中的第一张图片字节，作为缩略图回退方案。
+  /// 取目录中第一个视频的首帧作为缩略图回退方案。
   ///
   /// Android 上不能直接用 dart:io 枚举 scoped storage 路径——
   /// 那些路径对应用不可见，既读不到内容还要白白付出一次目录遍历，
-  /// 因此改走 MediaStore 拿到真实路径后再通过原生读取字节。
-  static Future<Uint8List?> _readFirstImageBytes(String folderPath) async {
+  /// 因此改走 MediaStore 拿到真实路径后再交由原生取帧。
+  static Future<VideoThumbnail?> _firstVideoThumbnail(String folderPath) async {
     if (Platform.isAndroid) {
-      final images = await MediaStoreService.getFolderImages(folderPath);
-      for (final item in images) {
-        final ext = item.path.split('.').last.toLowerCase();
-        if (!_supportedExtensions.contains(ext)) continue;
-        final data = await MediaStoreService.readImageBytes(item.path);
-        if (data != null) return data;
+      final videos = await MediaStoreService.getFolderVideos(folderPath);
+      for (final item in videos) {
+        if (!_supportedExtensions.contains(
+          item.path.split('.').last.toLowerCase(),
+        )) {
+          continue;
+        }
+        final thumbnail = await VideoThumbnailService.thumbnailFor(item.path);
+        if (thumbnail != null) return thumbnail;
       }
       return null;
     }
@@ -1111,9 +1076,10 @@ class _ThumbnailImageState extends State<_ThumbnailImage> {
         if (entity is File) {
           final ext = entity.path.split('.').last.toLowerCase();
           if (_supportedExtensions.contains(ext)) {
-            try {
-              return await entity.readAsBytes();
-            } catch (_) {}
+            final thumbnail = await VideoThumbnailService.thumbnailFor(
+              entity.path,
+            );
+            if (thumbnail != null) return thumbnail;
           }
         }
       }
@@ -1139,17 +1105,16 @@ class _ThumbnailImageState extends State<_ThumbnailImage> {
       );
     }
 
-    if (_imageBytes != null) {
-      // 缩略图容器最大 48dp，按真实尺寸解码即可。
-      // 不加 cacheWidth 时会把整张原图（动辄上千万像素）解码出来塞进 48dp 的框里，
-      // 是列表滚动卡顿的主要原因。
-      final cacheWidth = (48 * MediaQuery.of(context).devicePixelRatio * 2)
-          .round();
+    final thumbnail = _thumbnail;
+    if (thumbnail != null) {
+      // 缩略图容器最大 48dp，且帧最长边仅 512px，按真实尺寸解码即可。
       return Image.memory(
-        _imageBytes!,
+        thumbnail.bytes,
         width: double.infinity,
         height: double.infinity,
-        cacheWidth: cacheWidth,
+        cacheWidth: (48 * MediaQuery.of(context).devicePixelRatio * 2)
+            .round()
+            .clamp(1, thumbnail.width),
         fit: BoxFit.cover,
         errorBuilder: (context, error, stackTrace) => _buildPlaceholder(),
       );
@@ -1162,7 +1127,7 @@ class _ThumbnailImageState extends State<_ThumbnailImage> {
     return Container(
       color: const Color(0xFF1a1a2e),
       child: const Icon(
-        Icons.photo_library,
+        Icons.movie_outlined,
         color: Colors.blueAccent,
         size: 24,
       ),

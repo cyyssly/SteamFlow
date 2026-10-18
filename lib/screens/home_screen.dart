@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:steam_flow/models/image_item.dart';
+import 'package:steam_flow/models/video_item.dart';
 import 'package:steam_flow/providers/slide_provider.dart';
 import 'package:steam_flow/providers/settings_provider.dart';
 import 'package:steam_flow/screens/folder_selection_screen.dart';
@@ -43,7 +43,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       // 使用 Map 进行去重
-      final uniqueImages = <String, ImageItem>{};
+      final uniqueVideos = <String, VideoItem>{};
       bool hasStartedPlaying = false;
       DateTime lastUpdateTime = DateTime.now();
       const updateInterval = Duration(milliseconds: 300);
@@ -51,26 +51,26 @@ class _HomeScreenState extends State<HomeScreen> {
 
       // 逐个扫描文件夹
       for (final folderPath in slideProvider.folderPaths) {
-        final images = await _scanFolder(folderPath, settingsProvider);
-        for (final image in images) {
-          if (!uniqueImages.containsKey(image.path)) {
-            uniqueImages[image.path] = image;
+        final videos = await _scanFolder(folderPath, settingsProvider);
+        for (final video in videos) {
+          if (!uniqueVideos.containsKey(video.path)) {
+            uniqueVideos[video.path] = video;
           }
 
           // 随机模式：边扫描边播放，每隔300ms增量更新列表
           if (isRandomMode) {
             final now = DateTime.now();
             if (now.difference(lastUpdateTime) >= updateInterval) {
-              final newImages = uniqueImages.values.toList()
+              final newVideos = uniqueVideos.values.toList()
                 ..sort((a, b) => a.name.compareTo(b.name));
               if (hasStartedPlaying) {
-                slideProvider.addNewImages(
-                  newImages,
+                slideProvider.addNewVideos(
+                  newVideos,
                   settingsProvider.playOrder,
                 );
               } else {
-                slideProvider.setImages(
-                  newImages,
+                slideProvider.setVideos(
+                  newVideos,
                   playOrder: settingsProvider.playOrder,
                 );
                 slideProvider.sortByPlayOrder(settingsProvider.playOrder);
@@ -80,13 +80,13 @@ class _HomeScreenState extends State<HomeScreen> {
           }
         }
 
-        // 随机模式：收集到>=10张且未开始播放 → 提前开始（仅随机模式）
+        // 随机模式：收集到>=10个且未开始播放 → 提前开始（仅随机模式）
         if (isRandomMode &&
             settingsProvider.autoPlay &&
             !hasStartedPlaying &&
-            uniqueImages.length >= 10) {
+            uniqueVideos.length >= 10) {
           await _startPlaybackEarly(
-            uniqueImages.values.toList(),
+            uniqueVideos.values.toList(),
             slideProvider,
             settingsProvider,
           );
@@ -95,10 +95,10 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       // 所有文件夹扫描完毕
-      final allImages = uniqueImages.values.toList()
+      final allVideos = uniqueVideos.values.toList()
         ..sort((a, b) => a.name.compareTo(b.name));
 
-      if (allImages.isEmpty) {
+      if (allVideos.isEmpty) {
         setState(() {
           _isAutoScanning = false;
         });
@@ -106,12 +106,12 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       if (hasStartedPlaying) {
-        // 随机模式已提前播放：增量添加剩余新图片
-        slideProvider.addNewImages(allImages, settingsProvider.playOrder);
+        // 随机模式已提前播放：增量添加剩余新视频
+        slideProvider.addNewVideos(allVideos, settingsProvider.playOrder);
       } else {
-        // 非随机模式（或图片不足10张）：全量设置并排序后开始播放
-        slideProvider.setImages(
-          allImages,
+        // 非随机模式（或视频不足10个）：全量设置并排序后开始播放
+        slideProvider.setVideos(
+          allVideos,
           playOrder: settingsProvider.playOrder,
         );
         slideProvider.sortByPlayOrder(settingsProvider.playOrder);
@@ -139,16 +139,16 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _startPlaybackEarly(
-    List<ImageItem> images,
+    List<VideoItem> videos,
     SlideProvider slideProvider,
     SettingsProvider settingsProvider,
   ) async {
-    // 对已收集的图片进行排序
-    final sortedImages = images.toList()
+    // 对已收集的视频进行排序
+    final sortedVideos = videos.toList()
       ..sort((a, b) => a.name.compareTo(b.name));
 
-    slideProvider.setImages(
-      sortedImages,
+    slideProvider.setVideos(
+      sortedVideos,
       playOrder: settingsProvider.playOrder,
     );
     slideProvider.sortByPlayOrder(settingsProvider.playOrder);
@@ -163,26 +163,17 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<List<ImageItem>> _scanFolder(
+  Future<List<VideoItem>> _scanFolder(
     String folderPath,
     SettingsProvider settings,
   ) async {
-    const supportedExtensions = {
-      'jpg',
-      'jpeg',
-      'png',
-      'webp',
-      'bmp',
-      'gif',
-      'tiff',
-      'tif',
-    };
+    const supportedExtensions = {'mp4', 'm4v', 'mov', 'mkv', 'webm'};
 
     // Android 端通过 MediaStore 查询（绕过 Scoped Storage 限制）
     if (Platform.isAndroid) {
-      // 直接透传 ImageItem，保留 MediaStore 已索引好的宽高比
-      final images = await MediaStoreService.getFolderImages(folderPath);
-      return images.where((item) {
+      // 直接透传 VideoItem，保留 MediaStore 已索引好的宽高比
+      final videos = await MediaStoreService.getFolderVideos(folderPath);
+      return videos.where((item) {
         final dotIndex = item.path.lastIndexOf('.');
         if (dotIndex == -1) return false;
         final ext = item.path.toLowerCase().substring(dotIndex + 1);
@@ -214,7 +205,7 @@ class _HomeScreenState extends State<HomeScreen> {
           return supportedExtensions.contains(ext);
         })
         .map(
-          (file) => ImageItem(
+          (file) => VideoItem(
             name: file.path.split(Platform.pathSeparator).last,
             path: file.path,
           ),
@@ -240,30 +231,30 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    // 总是重新扫描所有文件夹，确保获取完整的图片列表
+    // 总是重新扫描所有文件夹，确保获取完整的视频列表
     setState(() {
       _isAutoScanning = true;
     });
 
     try {
       // 使用 Map 进行去重
-      final uniqueImages = <String, ImageItem>{};
+      final uniqueVideos = <String, VideoItem>{};
 
       // 逐个扫描文件夹
       for (final folderPath in slideProvider.folderPaths) {
-        final images = await _scanFolder(folderPath, settingsProvider);
-        for (final image in images) {
-          if (!uniqueImages.containsKey(image.path)) {
-            uniqueImages[image.path] = image;
+        final videos = await _scanFolder(folderPath, settingsProvider);
+        for (final video in videos) {
+          if (!uniqueVideos.containsKey(video.path)) {
+            uniqueVideos[video.path] = video;
           }
         }
       }
 
       // 按文件名排序
-      final sortedImages = uniqueImages.values.toList()
+      final sortedVideos = uniqueVideos.values.toList()
         ..sort((a, b) => a.name.compareTo(b.name));
 
-      if (sortedImages.isEmpty) {
+      if (sortedVideos.isEmpty) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -276,8 +267,8 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       if (!mounted) return;
-      slideProvider.setImages(
-        sortedImages,
+      slideProvider.setVideos(
+        sortedVideos,
         playOrder: settingsProvider.playOrder,
       );
       slideProvider.sortByPlayOrder(settingsProvider.playOrder);
@@ -288,7 +279,7 @@ class _HomeScreenState extends State<HomeScreen> {
         Navigator.pushNamed(context, '/player');
       }
     } catch (e) {
-      debugPrint('扫描图片失败: $e');
+      debugPrint('扫描视频失败: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(

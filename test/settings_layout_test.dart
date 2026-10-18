@@ -79,7 +79,7 @@ void main() {
     for (final title in [
       l10n.languageLabel,
       l10n.playSettings,
-      l10n.imageDisplay,
+      l10n.videoDisplay,
       l10n.transitionAnimation,
       l10n.windowFullscreen,
       l10n.filesAndDirs,
@@ -117,7 +117,7 @@ void main() {
     }
 
     // 左栏（第 1 栏）应包含这些分组。
-    for (final title in ['languageLabel', 'imageDisplay', 'windowFullscreen']) {
+    for (final title in ['languageLabel', 'videoDisplay', 'windowFullscreen']) {
       expectOnlyIn(left, right, _titleOf(l10n, title));
     }
     // 右栏（第 2 栏）应包含这些分组。
@@ -144,8 +144,8 @@ String _titleOf(AppLocalizations l10n, String name) {
       return l10n.languageLabel;
     case 'playSettings':
       return l10n.playSettings;
-    case 'imageDisplay':
-      return l10n.imageDisplay;
+    case 'videoDisplay':
+      return l10n.videoDisplay;
     case 'transitionAnimation':
       return l10n.transitionAnimation;
     case 'windowFullscreen':

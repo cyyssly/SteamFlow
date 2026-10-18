@@ -3,44 +3,44 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'package:steam_flow/models/image_item.dart';
+import 'package:steam_flow/models/video_item.dart';
 import 'package:steam_flow/providers/settings_provider.dart';
 import 'package:steam_flow/providers/slide_provider.dart';
 import 'package:steam_flow/services/fullscreen_service.dart';
-import 'package:steam_flow/services/image_scan_service.dart';
+import 'package:steam_flow/services/video_scan_service.dart';
 import 'package:steam_flow/services/media_store_service.dart';
-import 'package:steam_flow/widgets/masonry_image_grid.dart';
+import 'package:steam_flow/widgets/masonry_video_grid.dart';
 import 'package:steam_flow/l10n/app_localizations.dart';
 
 /// 瀑布流排序方式
 enum _SortMode { byName, byTime, random }
 
-/// 文件夹图片瀑布流浏览页
+/// 文件夹视频瀑布流浏览页
 ///
 /// 卡片悬停时只显示一个右下角按钮，其行为由「删除行为」设置决定：
 /// 排除播放或实际删除。
-class FolderImagesScreen extends StatefulWidget {
+class FolderVideosScreen extends StatefulWidget {
   final String folderPath;
 
-  const FolderImagesScreen({super.key, required this.folderPath});
+  const FolderVideosScreen({super.key, required this.folderPath});
 
   @override
-  State<FolderImagesScreen> createState() => _FolderImagesScreenState();
+  State<FolderVideosScreen> createState() => _FolderVideosScreenState();
 }
 
-class _FolderImagesScreenState extends State<FolderImagesScreen> {
-  /// 全部图片（扫描结果）
-  List<ImageItem> _allItems = [];
+class _FolderVideosScreenState extends State<FolderVideosScreen> {
+  /// 全部视频（扫描结果）
+  List<VideoItem> _allItems = [];
 
-  /// 当前已显示在瀑布流中的图片
-  List<ImageItem> _items = [];
+  /// 当前已显示在瀑布流中的视频
+  List<VideoItem> _items = [];
   bool _isLoading = true;
   int? _selectedIndex;
 
-  /// 每批加载的图片数量
+  /// 每批加载的视频数量
   static const _pageSize = 30;
 
-  /// 已加载到内存的图片数量（宽高比与预解码都已就绪）
+  /// 已加载到内存的视频数量（宽高比与预解码都已就绪）
   int _loadedCount = 0;
 
   /// 是否正在预加载（防止重复触发）
@@ -62,7 +62,7 @@ class _FolderImagesScreenState extends State<FolderImagesScreen> {
   @override
   void initState() {
     super.initState();
-    _loadImages();
+    _loadVideos();
     HardwareKeyboard.instance.addHandler(_hardwareKeyHandler);
   }
 
@@ -97,9 +97,9 @@ class _FolderImagesScreenState extends State<FolderImagesScreen> {
     }
   }
 
-  Future<void> _loadImages() async {
+  Future<void> _loadVideos() async {
     final settings = Provider.of<SettingsProvider>(context, listen: false);
-    final items = await ImageScanService.scanFolder(
+    final items = await VideoScanService.scanFolder(
       widget.folderPath,
       settings,
     );
@@ -109,7 +109,7 @@ class _FolderImagesScreenState extends State<FolderImagesScreen> {
       // 首屏按当前排序方式排列（默认：文件名顺序）
       _applySortToAllItems();
       _items = _allItems.take(_pageSize).toList();
-      // 图片不足一页时不要记成 30，否则 _loadMore 会取到空区间
+      // 视频不足一页时不要记成 30，否则 _loadMore 会取到空区间
       _loadedCount = _allItems.length.clamp(0, _pageSize);
       _isLoading = false;
     });
@@ -150,10 +150,10 @@ class _FolderImagesScreenState extends State<FolderImagesScreen> {
     }
   }
 
-  /// 滚动接近底部时：立即显示已预加载的图片，并预加载下一批
+  /// 滚动接近底部时：立即显示已预加载的视频，并预加载下一批
   void _loadMore() {
     if (_items.length >= _allItems.length) return;
-    // 显示已预加载的图片（宽高比与像素都已就绪，无跳变、无卡顿）
+    // 显示已预加载的视频（宽高比与像素都已就绪，无跳变、无卡顿）
     final newItems = _allItems.sublist(_items.length, _loadedCount);
     if (newItems.isNotEmpty) {
       setState(() {
@@ -164,11 +164,11 @@ class _FolderImagesScreenState extends State<FolderImagesScreen> {
     unawaited(_preloadNextBatch());
   }
 
-  /// 读取一批图片的宽高比，完成后一次性更新（避免频繁 setState）
+  /// 读取一批视频的宽高比，完成后一次性更新（避免频繁 setState）
   ///
-  /// Android 端 MediaStore 已直接给出宽高比，只有未索引到尺寸的图片
+  /// Android 端 MediaStore 已直接给出宽高比，只有未索引到尺寸的视频
   /// 才需要走文件解析，因此这里先过滤再解析。
-  Future<void> _loadAspectRatios(List<ImageItem> batch) async {
+  Future<void> _loadAspectRatios(List<VideoItem> batch) async {
     final pendingIndexes = <int>[];
     final pendingPaths = <String>[];
     for (var i = 0; i < batch.length; i++) {
@@ -179,7 +179,7 @@ class _FolderImagesScreenState extends State<FolderImagesScreen> {
     }
     if (pendingPaths.isEmpty) return;
 
-    final ratios = await ImageScanService.readAspectRatios(pendingPaths);
+    final ratios = await VideoScanService.readAspectRatios(pendingPaths);
     if (!mounted) return;
     setState(() {
       // 建立 路径→索引 映射，避免逐项 indexWhere 导致 O(n²)
@@ -197,7 +197,7 @@ class _FolderImagesScreenState extends State<FolderImagesScreen> {
         if (ratio == null) continue;
         final i = pendingIndexes[k];
         final item = batch[i];
-        final updated = ImageItem(
+        final updated = VideoItem(
           name: item.name,
           path: item.path,
           aspectRatio: ratio,
@@ -214,13 +214,10 @@ class _FolderImagesScreenState extends State<FolderImagesScreen> {
     });
   }
 
-  /// 预解码指定图片的像素，填充 [ImageCache]
-  Future<void> _precacheBatch(List<ImageItem> batch) async {
+  /// 预生成一批视频的缩略图，填充缩略图缓存
+  Future<void> _precacheBatch(List<VideoItem> batch) async {
     if (!mounted || batch.isEmpty) return;
-    await MasonryImageGrid.precacheAll(
-      batch.map((e) => e.path).toList(),
-      context,
-    );
+    await MasonryVideoGrid.precacheAll(batch.map((e) => e.path).toList());
   }
 
   // ── 排序 ──
@@ -246,7 +243,7 @@ class _FolderImagesScreenState extends State<FolderImagesScreen> {
   }
 
   /// 读取文件修改时间；读取失败时按最早处理，保证排序结果稳定
-  DateTime _modifiedTimeOf(ImageItem item) {
+  DateTime _modifiedTimeOf(VideoItem item) {
     try {
       return File(item.path).lastModifiedSync();
     } catch (_) {
@@ -309,7 +306,7 @@ class _FolderImagesScreenState extends State<FolderImagesScreen> {
   }
 
   // ── 单图操作 ──
-  void _excludeImage(String path) {
+  void _excludeVideo(String path) {
     final settings = Provider.of<SettingsProvider>(context, listen: false);
     settings.addExcludedPath(path);
     setState(() {
@@ -320,16 +317,16 @@ class _FolderImagesScreenState extends State<FolderImagesScreen> {
   }
 
   /// 卡片右下角按钮的统一行为：按「删除行为」设置执行排除播放或实际删除
-  void _applyDeleteAction(ImageItem item) {
+  void _applyDeleteAction(VideoItem item) {
     final settings = Provider.of<SettingsProvider>(context, listen: false);
     if (settings.deleteAction == DeleteAction.exclude) {
-      _excludeImage(item.path);
+      _excludeVideo(item.path);
     } else {
-      _deleteImage(item);
+      _deleteVideo(item);
     }
   }
 
-  Future<void> _deleteImage(ImageItem item) async {
+  Future<void> _deleteVideo(VideoItem item) async {
     final ok = await MediaStoreService.deleteToTrash([item.path]);
     if (!mounted) return;
     if (!ok) {
@@ -343,23 +340,23 @@ class _FolderImagesScreenState extends State<FolderImagesScreen> {
     _showSnack(AppLocalizations.of(context).deletedToTrash);
   }
 
-  /// 从瀑布流进入幻灯播放。
+  /// 从瀑布流进入播放。
   ///
-  /// 播放范围限定为当前文件夹：使用本次扫描到的全部图片（而不是仅已加载的
-  /// 那一批），顺序按「播放顺序」设置排列，起点为被点中的那张图片。
+  /// 播放范围限定为当前文件夹：使用本次扫描到的全部视频（而不是仅已加载的
+  /// 那一批），顺序按「播放顺序」设置排列，起点为被点中的那个视频。
   void _startPlaybackFrom(int index) {
     if (index < 0 || index >= _items.length) return;
     final item = _items[index];
     final settings = Provider.of<SettingsProvider>(context, listen: false);
     final slideProvider = Provider.of<SlideProvider>(context, listen: false);
 
-    slideProvider.setImages(_allItems.toList(), playOrder: settings.playOrder);
+    slideProvider.setVideos(_allItems.toList(), playOrder: settings.playOrder);
     slideProvider.sortByPlayOrder(settings.playOrder);
-    // 排序后重新定位被点中的图片；理论上必然能找到，兜底回到第一张
-    final startIndex = slideProvider.images.indexWhere(
-      (image) => image.path == item.path,
+    // 排序后重新定位被点中的视频；理论上必然能找到，兜底回到第一个
+    final startIndex = slideProvider.videos.indexWhere(
+      (video) => video.path == item.path,
     );
-    slideProvider.goToImage(startIndex >= 0 ? startIndex : 0);
+    slideProvider.goToVideo(startIndex >= 0 ? startIndex : 0);
     slideProvider.startPlay();
 
     setState(() => _selectedIndex = null);
@@ -430,16 +427,16 @@ class _FolderImagesScreenState extends State<FolderImagesScreen> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(Icons.image, size: 64, color: Colors.grey),
+                    const Icon(Icons.movie_outlined, size: 64, color: Colors.grey),
                     const SizedBox(height: 16),
                     Text(
-                      loc.noImagesInFolder,
+                      loc.noVideosInFolder,
                       style: const TextStyle(color: Colors.grey, fontSize: 16),
                     ),
                   ],
                 ),
               )
-            : MasonryImageGrid(
+            : MasonryVideoGrid(
                 items: _items,
                 selectedIndex: _selectedIndex,
                 hasMore: _items.length < _allItems.length,
@@ -470,7 +467,7 @@ class _FolderImagesScreenState extends State<FolderImagesScreen> {
                     : Colors.redAccent,
                 singleActionTooltip: deleteExcludes
                     ? loc.excludeFromPlay
-                    : loc.deleteImage,
+                    : loc.deleteVideo,
               ),
       ),
     );

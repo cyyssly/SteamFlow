@@ -3,34 +3,34 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'package:steam_flow/models/image_item.dart';
+import 'package:steam_flow/models/video_item.dart';
 import 'package:steam_flow/providers/settings_provider.dart';
 import 'package:steam_flow/services/directory_picker_service.dart';
 import 'package:steam_flow/services/fullscreen_service.dart';
-import 'package:steam_flow/services/image_scan_service.dart';
+import 'package:steam_flow/services/video_scan_service.dart';
 import 'package:steam_flow/services/media_store_service.dart';
-import 'package:steam_flow/widgets/masonry_image_grid.dart';
+import 'package:steam_flow/widgets/masonry_video_grid.dart';
 import 'package:steam_flow/l10n/app_localizations.dart';
 
-class ExcludedImagesScreen extends StatefulWidget {
-  const ExcludedImagesScreen({super.key});
+class ExcludedVideosScreen extends StatefulWidget {
+  const ExcludedVideosScreen({super.key});
 
   @override
-  State<ExcludedImagesScreen> createState() => _ExcludedImagesScreenState();
+  State<ExcludedVideosScreen> createState() => _ExcludedVideosScreenState();
 }
 
-class _ExcludedImagesScreenState extends State<ExcludedImagesScreen> {
-  List<ImageItem> _excludedItems = [];
+class _ExcludedVideosScreenState extends State<ExcludedVideosScreen> {
+  List<VideoItem> _excludedItems = [];
   bool _isLoading = true;
   int? _selectedIndex;
 
-  /// 每批处理的图片数量，避免一次性读取过多元数据/解码过多图片
+  /// 每批处理的视频数量，避免一次性读取过多元数据/解码过多视频
   static const _batchSize = 30;
 
   @override
   void initState() {
     super.initState();
-    _loadExcludedImages();
+    _loadExcludedVideos();
     HardwareKeyboard.instance.addHandler(_hardwareKeyHandler);
   }
 
@@ -65,14 +65,14 @@ class _ExcludedImagesScreenState extends State<ExcludedImagesScreen> {
     }
   }
 
-  void _loadExcludedImages() {
+  void _loadExcludedVideos() {
     final settings = Provider.of<SettingsProvider>(context, listen: false);
-    final items = <ImageItem>[];
+    final items = <VideoItem>[];
     for (final path in settings.excludedPaths) {
       final file = File(path);
       if (file.existsSync()) {
         items.add(
-          ImageItem(name: path.split(Platform.pathSeparator).last, path: path),
+          VideoItem(name: path.split(Platform.pathSeparator).last, path: path),
         );
       }
     }
@@ -85,10 +85,10 @@ class _ExcludedImagesScreenState extends State<ExcludedImagesScreen> {
   }
 
   /// 分批读取宽高比并预解码像素。
-  /// 逐张调用会为每张图创建一个 isolate，这里改为按批读取；
+  /// 逐个调用会为每个视频创建一个 isolate，这里改为按批读取；
   /// 同时真正把像素解码进 ImageCache，
   /// 否则滚动到新卡片时仍需现场解码，表现为卡顿。
-  Future<void> _loadMetadataAndPrecache(List<ImageItem> items) async {
+  Future<void> _loadMetadataAndPrecache(List<VideoItem> items) async {
     // 建立 路径→索引 映射，避免每批都做一次 indexWhere 全表扫描
     final indexByPath = <String, int>{};
     for (var i = 0; i < _excludedItems.length; i++) {
@@ -111,7 +111,7 @@ class _ExcludedImagesScreenState extends State<ExcludedImagesScreen> {
       }
 
       if (pendingPaths.isNotEmpty) {
-        final ratios = await ImageScanService.readAspectRatios(pendingPaths);
+        final ratios = await VideoScanService.readAspectRatios(pendingPaths);
         if (!mounted) return;
         setState(() {
           for (var k = 0; k < pendingPaths.length; k++) {
@@ -121,7 +121,7 @@ class _ExcludedImagesScreenState extends State<ExcludedImagesScreen> {
             final item = batch[i];
             final index = indexByPath[item.path];
             if (index == null) continue;
-            final updated = ImageItem(
+            final updated = VideoItem(
               name: item.name,
               path: item.path,
               aspectRatio: ratio,
@@ -136,24 +136,21 @@ class _ExcludedImagesScreenState extends State<ExcludedImagesScreen> {
     }
   }
 
-  /// 预解码一批图片的像素，填充 [ImageCache]
-  Future<void> _precacheBatch(List<ImageItem> batch) async {
+  /// 预生成一批视频的缩略图，填充缩略图缓存
+  Future<void> _precacheBatch(List<VideoItem> batch) async {
     if (!mounted) return;
-    await MasonryImageGrid.precacheAll(
-      batch.map((e) => e.path).toList(),
-      context,
-    );
+    await MasonryVideoGrid.precacheAll(batch.map((e) => e.path).toList());
   }
 
   // ── 单图操作 ──
-  void _restoreImage(String path) {
+  void _restoreVideo(String path) {
     final settings = Provider.of<SettingsProvider>(context, listen: false);
     settings.removeExcludedPath(path);
     setState(() => _excludedItems.removeWhere((item) => item.path == path));
-    _showSnack(AppLocalizations.of(context).imageRestored);
+    _showSnack(AppLocalizations.of(context).videoRestored);
   }
 
-  Future<void> _deleteImage(ImageItem item) async {
+  Future<void> _deleteVideo(VideoItem item) async {
     final ok = await MediaStoreService.deleteToTrash([item.path]);
     if (!mounted) return;
     if (!ok) {
@@ -166,7 +163,7 @@ class _ExcludedImagesScreenState extends State<ExcludedImagesScreen> {
     _showSnack(AppLocalizations.of(context).deletedToTrash);
   }
 
-  Future<void> _moveImage(ImageItem item) async {
+  Future<void> _moveVideo(VideoItem item) async {
     // Android 用 SAF 选择可写目录（tree uri），其他平台用 FilePicker 选择路径
     final result = await _pickDestination();
     if (result == null) return;
@@ -182,7 +179,7 @@ class _ExcludedImagesScreenState extends State<ExcludedImagesScreen> {
     setState(() => _excludedItems.removeWhere((i) => i.path == item.path));
   }
 
-  Future<void> _copyImage(ImageItem item) async {
+  Future<void> _copyVideo(VideoItem item) async {
     // Android 用 SAF 选择可写目录（tree uri），其他平台用 FilePicker 选择路径
     final result = await _pickDestination();
     if (result == null) return;
@@ -211,7 +208,7 @@ class _ExcludedImagesScreenState extends State<ExcludedImagesScreen> {
     final settings = Provider.of<SettingsProvider>(context, listen: false);
     settings.clearExcludedPaths();
     setState(() => _excludedItems.clear());
-    _showSnack(AppLocalizations.of(context).allImagesRestored);
+    _showSnack(AppLocalizations.of(context).allVideosRestored);
   }
 
   Future<void> _deleteAll() async {
@@ -232,7 +229,7 @@ class _ExcludedImagesScreenState extends State<ExcludedImagesScreen> {
     final result = await _pickDestination();
     if (result == null) return;
     if (!mounted) return;
-    final items = List<ImageItem>.from(_excludedItems);
+    final items = List<VideoItem>.from(_excludedItems);
     final ok = await MediaStoreService.moveFiles(
       result,
       items.map((e) => e.path).toList(),
@@ -252,7 +249,7 @@ class _ExcludedImagesScreenState extends State<ExcludedImagesScreen> {
     final result = await _pickDestination();
     if (result == null) return;
     if (!mounted) return;
-    final items = List<ImageItem>.from(_excludedItems);
+    final items = List<VideoItem>.from(_excludedItems);
     final ok = await MediaStoreService.copyFiles(
       result,
       items.map((e) => e.path).toList(),
@@ -323,13 +320,13 @@ class _ExcludedImagesScreenState extends State<ExcludedImagesScreen> {
                     const Icon(Icons.inbox, size: 64, color: Colors.grey),
                     const SizedBox(height: 16),
                     Text(
-                      loc.noExcludedImages,
+                      loc.noExcludedVideos,
                       style: const TextStyle(color: Colors.grey, fontSize: 16),
                     ),
                   ],
                 ),
               )
-            : MasonryImageGrid(
+            : MasonryVideoGrid(
                 items: _excludedItems,
                 selectedIndex: _selectedIndex,
                 onTap: (index) {
@@ -338,19 +335,19 @@ class _ExcludedImagesScreenState extends State<ExcludedImagesScreen> {
                   });
                 },
                 onPrimaryAction: (index) {
-                  _restoreImage(_excludedItems[index].path);
+                  _restoreVideo(_excludedItems[index].path);
                   if (mounted) setState(() => _selectedIndex = null);
                 },
                 onDelete: (index) {
-                  _deleteImage(_excludedItems[index]);
+                  _deleteVideo(_excludedItems[index]);
                   if (mounted) setState(() => _selectedIndex = null);
                 },
                 onMove: (index) {
-                  _moveImage(_excludedItems[index]);
+                  _moveVideo(_excludedItems[index]);
                   if (mounted) setState(() => _selectedIndex = null);
                 },
                 onCopy: (index) {
-                  _copyImage(_excludedItems[index]);
+                  _copyVideo(_excludedItems[index]);
                 },
                 primaryIcon: Icons.restore,
                 primaryColor: Colors.orange,

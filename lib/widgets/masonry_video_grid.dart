@@ -1,20 +1,22 @@
-import 'dart:io';
+import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/rendering.dart'
     show SliverGridLayout, SliverGridGeometry, SliverConstraints;
-import 'package:steam_flow/models/image_item.dart';
+import 'package:steam_flow/models/video_item.dart';
+import 'package:steam_flow/services/video_thumbnail_service.dart';
 import 'package:steam_flow/l10n/app_localizations.dart';
 
-/// 瀑布流网格组件：固定列宽，高度按图片宽高比自适应
-class MasonryImageGrid extends StatelessWidget {
+/// 瀑布流网格组件：固定列宽，高度按视频宽高比自适应
+class MasonryVideoGrid extends StatelessWidget {
   /// 宽屏下单个卡片的参考显示宽度（逻辑像素）。
   static const double tileReferenceWidth = 400;
 
   /// 网格四周内边距（与 [build] 中的 SliverPadding 保持一致）。
   ///
-  /// 必须与 [crossAxisSpacing] 相等：两者分别是「屏幕边缘到图片」和
-  /// 「图片之间」的间距，取值相同才能让两侧与中间看起来一致。
+  /// 必须与 [crossAxisSpacing] 相等：两者分别是「屏幕边缘到视频」和
+  /// 「视频之间」的间距，取值相同才能让两侧与中间看起来一致。
   static const double gridPadding = 8;
 
   /// 卡片之间的横向间距（与 [_MasonryGridDelegate] 的参数保持一致）
@@ -26,7 +28,7 @@ class MasonryImageGrid extends StatelessWidget {
   /// 解码宽度的上浮系数与上下限。
   ///
   /// 略高于真实显示宽度，避免因取整导致轻微发虚；同时设上限，
-  /// 防止在超宽屏幕上解码出一张远超所需的巨图。
+  /// 防止在超宽屏幕上解码出一帧远超所需的巨图。
   static const double _decodeOversample = 1.2;
   static const int _minDecodeWidth = 64;
   static const int _maxDecodeWidth = 2048;
@@ -43,7 +45,7 @@ class MasonryImageGrid extends StatelessWidget {
         count;
   }
 
-  /// 卡片图片的解码宽度（物理像素）。
+  /// 卡片视频的解码宽度（物理像素）。
   ///
   /// 按**真实卡片宽度**而非固定的 400 逻辑像素换算：
   /// 手机上 2 列时卡片仅约 180dp，若一律按 400dp × devicePixelRatio
@@ -60,40 +62,28 @@ class MasonryImageGrid extends StatelessWidget {
     return decodeWidth.clamp(_minDecodeWidth, _maxDecodeWidth);
   }
 
-  /// 构造卡片使用的 [ImageProvider]，等价于
-  /// `Image.file(File(path), cacheWidth: decodeWidthFor(context)).image`。
-  static ImageProvider imageProviderFor(String path, BuildContext context) =>
-      ResizeImage(FileImage(File(path)), width: decodeWidthFor(context));
-
-  /// 把一批图片真正解码进 [ImageCache]，滚动到它们时即可直接命中缓存。
-  /// 仅读取宽高比不会解码像素，必须调用本方法才能消除滚动卡顿。
-  /// [concurrency] 为同时解码的张数，过大反而会互相抢占 IO 与解码线程。
-  static Future<void> precacheAll(
-    List<String> paths,
-    BuildContext context, {
-    int concurrency = 6,
-  }) async {
-    for (var i = 0; i < paths.length; i += concurrency) {
-      if (!context.mounted) return;
-      final chunk = paths.skip(i).take(concurrency);
-      await Future.wait(
-        chunk.map(
-          (path) => precacheImage(
-            imageProviderFor(path, context),
-            context,
-            // 单张失败（损坏/已被删除）不影响其余图片
-            onError: (_, _) {},
-          ),
-        ),
-      );
-    }
+  /// 卡片缩略图的解码宽度（物理像素），上限为缩略图本身的实际宽度。
+  ///
+  /// 缩略图最长边只有 512px，若请求更大的解码宽度，Flutter 会把图**放大**
+  /// 解码，白白多占内存。因此这里与实际帧宽取较小值。
+  static int thumbnailDecodeWidthFor(BuildContext context, int frameWidth) {
+    final decodeWidth = decodeWidthFor(context);
+    return frameWidth > 0 ? math.min(decodeWidth, frameWidth) : decodeWidth;
   }
 
-  final List<ImageItem> items;
+  /// 提前生成一批视频的缩略图，填充 [VideoThumbnailService] 的内存缓存。
+  ///
+  /// 滚动到这些卡片时缩略图已在缓存里，卡片可以直接渲染，
+  /// 不会先显示占位图再跳变。
+  static Future<void> precacheAll(List<String> paths) async {
+    await VideoThumbnailService.readAspectRatios(paths);
+  }
+
+  final List<VideoItem> items;
   final int? selectedIndex;
   final ValueChanged<int> onTap;
 
-  /// 长按回调（可选）。文件夹图片页用它直接进入幻灯播放。
+  /// 长按回调（可选）。文件夹视频页用它直接进入播放。
   final void Function(int index)? onLongPress;
 
   /// 「删除类」操作的回调。
@@ -102,7 +92,7 @@ class MasonryImageGrid extends StatelessWidget {
   /// 实际行为（排除播放 / 实际删除）由调用方按当前设置决定。
   final void Function(int index) onDelete;
 
-  /// 覆盖层是否只显示右下角的单个按钮（文件夹图片页使用）
+  /// 覆盖层是否只显示右下角的单个按钮（文件夹视频页使用）
   final bool singleActionOverlay;
 
   /// 单按钮模式下按钮的图标、颜色与提示文字
@@ -110,7 +100,7 @@ class MasonryImageGrid extends StatelessWidget {
   final Color singleActionColor;
   final String? singleActionTooltip;
 
-  // ── 以下为四按钮模式（已排除图片页）所需的参数 ──
+  // ── 以下为四按钮模式（已排除视频页）所需的参数 ──
   final void Function(int index)? onPrimaryAction;
   final void Function(int index)? onMove;
   final void Function(int index)? onCopy;
@@ -128,7 +118,7 @@ class MasonryImageGrid extends StatelessWidget {
   /// 留足解码时间，避免"滚到底才开始解码"造成的卡顿。
   final double? prefetchExtent;
 
-  const MasonryImageGrid({
+  const MasonryVideoGrid({
     super.key,
     required this.items,
     required this.selectedIndex,
@@ -198,7 +188,7 @@ class MasonryImageGrid extends StatelessWidget {
                         if (context.mounted) loadMore();
                       });
                     }
-                    return _MasonryImageCard(
+                    return _MasonryVideoCard(
                       item: items[index],
                       isSelected: selectedIndex == index,
                       onTap: () => onTap(index),
@@ -244,9 +234,9 @@ class MasonryImageGrid extends StatelessWidget {
   }
 }
 
-// ── 单个图片卡片（PC悬停 / 移动端点击选中 显示覆盖层） ──
-class _MasonryImageCard extends StatefulWidget {
-  final ImageItem item;
+// ── 单个视频卡片（PC悬停 / 移动端点击选中 显示覆盖层） ──
+class _MasonryVideoCard extends StatefulWidget {
+  final VideoItem item;
   final bool isSelected;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
@@ -258,7 +248,7 @@ class _MasonryImageCard extends StatefulWidget {
   final Color singleActionColor;
   final String? singleActionTooltip;
 
-  // ── 四按钮模式（已排除图片页）所需的回调与样式 ──
+  // ── 四按钮模式（已排除视频页）所需的回调与样式 ──
   final VoidCallback? onPrimary;
   final VoidCallback? onMove;
   final VoidCallback? onCopy;
@@ -266,7 +256,7 @@ class _MasonryImageCard extends StatefulWidget {
   final Color? primaryColor;
   final String? primaryTooltip;
 
-  const _MasonryImageCard({
+  const _MasonryVideoCard({
     required this.item,
     required this.isSelected,
     required this.onTap,
@@ -285,16 +275,62 @@ class _MasonryImageCard extends StatefulWidget {
   });
 
   @override
-  State<_MasonryImageCard> createState() => _MasonryImageCardState();
+  State<_MasonryVideoCard> createState() => _MasonryVideoCardState();
 }
 
-class _MasonryImageCardState extends State<_MasonryImageCard> {
+class _MasonryVideoCardState extends State<_MasonryVideoCard> {
   bool _isHovered = false;
+
+  /// 当前卡片对应的视频缩略图；null 表示正在生成或生成失败
+  VideoThumbnail? _thumbnail;
+  bool _loading = true;
+
+  /// 每次重新发起加载时递增，用于丢弃「已过期」的结果。
+  /// 卡片复用到另一个视频上时，先前那次加载的结果必须被忽略，
+  /// 否则会残留上一个视频的缩略图。
+  int _requestId = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _adoptThumbnail();
+  }
+
+  @override
+  void didUpdateWidget(covariant _MasonryVideoCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.item.path != widget.item.path) {
+      // didUpdateWidget 之后紧接着就会 build，直接改字段即可，无需 setState
+      _adoptThumbnail();
+    }
+  }
+
+  /// 取缓存里已有的缩略图直接显示；没有则发起一次异步生成。
+  void _adoptThumbnail() {
+    final cached = VideoThumbnailService.cached(widget.item.path);
+    _thumbnail = cached;
+    _loading = cached == null;
+    if (cached == null) {
+      unawaited(_fetchThumbnail());
+    }
+  }
+
+  Future<void> _fetchThumbnail() async {
+    final requestId = ++_requestId;
+    final thumbnail = await VideoThumbnailService.thumbnailFor(
+      widget.item.path,
+    );
+    if (!mounted || requestId != _requestId) return;
+    setState(() {
+      _thumbnail = thumbnail;
+      _loading = false;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     // 悬停（桌面端）或选中（移动端点按）都只做「边框变色 + 显示操作图标」提示，
-    // 不再给图片加暗色遮罩，避免遮挡图片本身
+    // 不再给视频加暗色遮罩，避免遮挡视频本身
     final highlighted = _isHovered || widget.isSelected;
     return GestureDetector(
       onTap: widget.onTap,
@@ -319,18 +355,7 @@ class _MasonryImageCardState extends State<_MasonryImageCard> {
             child: Stack(
               fit: StackFit.expand,
               children: [
-                Image(
-                  // 与预解码共用同一个 Provider（含相同的 cacheWidth），
-                  // 卡片滚动到可见区域时可直接命中 ImageCache，无需重新解码
-                  image: MasonryImageGrid.imageProviderFor(
-                    widget.item.path,
-                    context,
-                  ),
-                  fit: BoxFit.fill,
-                  width: double.infinity,
-                  height: double.infinity,
-                  errorBuilder: (_, _, _) => const Icon(Icons.broken_image),
-                ),
+                _buildThumbnail(context),
                 // 悬停 或 选中 时显示覆盖层（只有图标按钮，无暗色遮罩）
                 if (highlighted) _buildOverlay(context),
               ],
@@ -341,10 +366,37 @@ class _MasonryImageCardState extends State<_MasonryImageCard> {
     );
   }
 
+  /// 视频首帧。缩略图来自 [VideoThumbnailService] 的内存缓存，
+  /// 复用同一个字节数组实例可让 [MemoryImage] 的键保持一致，
+  /// 重建时命中 Flutter 自己的 ImageCache。
+  Widget _buildThumbnail(BuildContext context) {
+    final thumbnail = _thumbnail;
+    if (thumbnail == null) {
+      return Container(
+        color: const Color(0xFF1a1a2e),
+        alignment: Alignment.center,
+        child: _loading
+            ? const SizedBox.shrink()
+            : const Icon(Icons.broken_image, color: Colors.grey),
+      );
+    }
+    return Image.memory(
+      thumbnail.bytes,
+      fit: BoxFit.fill,
+      width: double.infinity,
+      height: double.infinity,
+      cacheWidth: MasonryVideoGrid.thumbnailDecodeWidthFor(
+        context,
+        thumbnail.width,
+      ),
+      errorBuilder: (_, _, _) => const Icon(Icons.broken_image),
+    );
+  }
+
   Widget _buildOverlay(BuildContext context) {
     final loc = AppLocalizations.of(context);
 
-    // 单按钮模式：仅右下角一个「删除类」按钮（文件夹图片页使用），
+    // 单按钮模式：仅右下角一个「删除类」按钮（文件夹视频页使用），
     // 实际行为（排除播放 / 实际删除）由调用方按当前设置决定。
     if (widget.singleActionOverlay) {
       return Container(
@@ -353,13 +405,13 @@ class _MasonryImageCardState extends State<_MasonryImageCard> {
         child: _iconButton(
           widget.singleActionIcon,
           widget.singleActionColor,
-          widget.singleActionTooltip ?? loc.deleteImage,
+          widget.singleActionTooltip ?? loc.deleteVideo,
           widget.onDelete,
         ),
       );
     }
 
-    // 四按钮模式：居中 2×2 布局（已排除图片页使用）
+    // 四按钮模式：居中 2×2 布局（已排除视频页使用）
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -377,7 +429,7 @@ class _MasonryImageCardState extends State<_MasonryImageCard> {
               _iconButton(
                 Icons.delete_outline,
                 Colors.redAccent,
-                loc.deleteImage,
+                loc.deleteVideo,
                 widget.onDelete,
               ),
             ],
@@ -431,7 +483,7 @@ class _MasonryImageCardState extends State<_MasonryImageCard> {
   }
 }
 
-// ── 瀑布流布局委托：固定列宽，高度按图片宽高比自适应 ──
+// ── 瀑布流布局委托：固定列宽，高度按视频宽高比自适应 ──
 class _MasonryGridDelegate extends SliverGridDelegate {
   final int crossAxisCount;
   final double crossAxisSpacing;

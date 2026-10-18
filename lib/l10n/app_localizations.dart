@@ -76,7 +76,7 @@ class AppLocalizations {
   String get selectAlbum => _t('选择相册', 'Albums', '選擇相冊');
   String get selectFolder => _t('选择文件夹', 'Folders', '選擇文件夾');
   String get settings => _t('设置', 'Settings', '設置');
-  String get scanning => _t('正在扫描图片...', 'Scanning...', '正在掃描圖片...');
+  String get scanning => _t('正在扫描视频...', 'Scanning...', '正在掃描視頻...');
 
   // 相册选择页
   String get selectAlbumTitle => _t('选择相册', 'Albums', '選擇相冊');
@@ -91,8 +91,8 @@ class AppLocalizations {
   String get cancel => _t('取消', 'Cancel', '取消');
 
   // 播放页
-  String get noImages => _t('没有图片', 'No Images', '沒有圖片');
-  String get imageLoadFailed => _t('图片加载失败', 'Load Failed', '圖片加載失敗');
+  String get noVideos => _t('没有视频', 'No Videos', '沒有視頻');
+  String get videoLoadFailed => _t('视频加载失败', 'Load Failed', '視頻加載失敗');
   String get unknownDate => _t('未知日期', 'Unknown Date', '未知日期');
 
   // 设置页
@@ -106,21 +106,20 @@ class AppLocalizations {
   String get randomPlay => _t('随机播放', 'Random', '隨機播放');
   String get newestFirst => _t('由新到旧', 'Newest First', '由新到舊');
   String get oldestFirst => _t('由旧到新', 'Oldest First', '由舊到新');
-  String get newPreferred => _t('新图优先', 'New Preferred', '新圖優先');
+  String get newPreferred => _t('新视频优先', 'New Preferred', '新視頻優先');
   String get loopPlay => _t('循环播放', 'Loop', '循環播放');
   String get loopPlayDesc =>
       _t('关闭：播完停止；开启：首尾循环', 'Off: stop at end; On: loop', '關閉：播完停止；開啟：首尾循環');
   String get autoPlay => _t('自动播放', 'Auto Play', '自動播放');
   String get autoPlayDesc =>
-      _t('进入应用后立即开始播放幻灯片', 'Start slideshow on launch', '進入應用後立即開始播放幻燈片');
+      _t('进入应用后立即开始播放', 'Start playback on launch', '進入應用後立即開始播放');
   String get minute => _t('分钟', 'min', '分鐘');
   String get toggleFullscreen => _t('全屏切换', 'Toggle Fullscreen', '全屏切換');
-  String get interval => _t('换片时间', 'Interval', '換片時間');
-  String get imageDisplay => _t('图片显示', 'Display', '圖片顯示');
+  String get videoDisplay => _t('视频显示', 'Display', '視頻顯示');
   String get fitMode => _t('填充模式', 'Fit Mode', '填充模式');
   String get contain => _t('适应窗口', 'Contain', '適應窗口');
   String get cover => _t('填满窗口', 'Cover', '填滿窗口');
-  String get original => _t('原图大小', 'Original', '原圖大小');
+  String get original => _t('原始大小', 'Original', '原始大小');
   String get backgroundColorLabel => _t('背景底色', 'Background', '背景底色');
   String get black => _t('黑色', 'Black', '黑色');
   String get darkGray => _t('深灰', 'Dark Gray', '深灰');
@@ -129,7 +128,7 @@ class AppLocalizations {
   String get landscape => _t('横屏', 'Landscape', '橫屏');
   String get portrait => _t('竖屏', 'Portrait', '豎屏');
   String get followSystem => _t('跟随系统', 'System', '跟隨係統');
-  String get followImage => _t('跟随图片', 'Follow Image', '跟隨圖片');
+  String get followVideo => _t('跟随视频', 'Follow Video', '跟隨視頻');
   String get transitionAnimation => _t('切换动画', 'Transition', '切換動畫');
   String get none => _t('无动画', 'None', '無動畫');
   String get fade => _t('淡入淡出', 'Fade', '淡入淡出');
@@ -154,16 +153,16 @@ class AppLocalizations {
   String get filesAndDirs => _t('文件与目录', 'Files & Folders', '文件與目錄');
   String get recursiveScan => _t('包含子文件夹', 'Include Subfolders', '包含子文件夾');
   String get recursiveScanDesc => _t(
-    '开启后连子文件夹里的图片一起播放',
-    'Play images from subfolders too',
-    '開啟後連子文件夾裡的圖片一起播放',
+    '开启后连子文件夹里的视频一起播放',
+    'Play videos from subfolders too',
+    '開啟後連子文件夾裡的視頻一起播放',
   );
   String get infoDisplay => _t('信息显示', 'Info', '信息顯示');
-  String get showImageInfo => _t('图片信息显示', 'Show Info', '圖片信息顯示');
-  String get showImageInfoDesc => _t(
-    '文件名/文件大小/分辨率/当前页码',
-    'Name / Size / Resolution / Page',
-    '文件名/文件大小/分辨率/當前頁碼',
+  String get showVideoInfo => _t('视频信息显示', 'Show Info', '視頻信息顯示');
+  String get showVideoInfoDesc => _t(
+    '文件名/文件大小/分辨率/当前序号',
+    'Name / Size / Resolution / Index',
+    '文件名/文件大小/分辨率/當前序號',
   );
   String get infoAutoHideLabel => _t('信息条自动隐藏', 'Auto-hide Info', '信息條自動隱藏');
   String get infoAutoHideDesc =>
@@ -171,12 +170,12 @@ class AppLocalizations {
   String get infoHideDelay => _t('信息隐藏延迟', 'Info Hide Delay', '信息隱藏延遲');
   String get controlsLabel => _t('快捷键与控制', 'Controls', '快捷鍵與控制');
   String get wheelSwitch => _t('滚轮行为', 'Scroll Wheel', '滾輪行為');
-  String get wheelSwitchImage => _t('切换图片', 'Switch Image', '切換圖片');
-  String get wheelZoom => _t('缩放图片', 'Zoom', '縮放圖片');
+  String get wheelSwitchVideo => _t('切换视频', 'Switch Video', '切換視頻');
+  String get wheelZoom => _t('缩放视频', 'Zoom', '縮放視頻');
   String get ctrlWheelZoomHint =>
-      _t('Ctrl+滚轮：缩放图片', 'Ctrl + Wheel: Zoom', 'Ctrl+滾輪：縮放圖片');
+      _t('Ctrl+滚轮：缩放视频', 'Ctrl + Wheel: Zoom', 'Ctrl+滾輪：縮放視頻');
   String get ctrlWheelSwitchHint =>
-      _t('Ctrl+滚轮：切换图片', 'Ctrl + Wheel: Switch Image', 'Ctrl+滾輪：切換圖片');
+      _t('Ctrl+滚轮：切换视频', 'Ctrl + Wheel: Switch Video', 'Ctrl+滾輪：切換視頻');
   String get deleteBehavior => _t('删除行为', 'Delete', '刪除行為');
   String get ctrlDelDeleteHint =>
       _t('Ctrl+Del：实际删除', 'Ctrl + Del: Delete File', 'Ctrl+Del：實際刪除');
@@ -186,22 +185,19 @@ class AppLocalizations {
   String get deleteFile => _t('实际删除', 'Delete File', '實際刪除');
   String get second => _t('秒', 's', '秒');
   String get deleteFromDisk => _t('从磁盘删除', 'Delete from Disk', '從磁盤刪除');
-  String get playbackComplete => _t('播放完毕', 'Playback Complete', '播放完畢');
-  String get allImagesPlayed =>
-      _t('所有图片已播放完毕', 'All images have been shown', '所有圖片已播放完畢');
   String get confirmExclude => _t('确认排除', 'Confirm Exclude', '確認排除');
   String get confirmDelete => _t('确认删除', 'Confirm Delete', '確認刪除');
   String confirmDeleteMsg(String action) =>
-      _t('确定要$action这张图片吗？', 'Delete this image?', '確定要$action這張圖片嗎？');
+      _t('确定要$action这个视频吗？', 'Delete this video?', '確定要$action這個視頻嗎？');
   String get deleteFailed =>
       _t('文件删除失败，可能被其他程序占用', 'Delete failed: file in use', '文件刪除失敗，可能被其他程序佔用');
-  String get excluded => _t('图片已排除播放', 'Image excluded', '圖片已排除播放');
-  String get deleted => _t('图片已删除', 'Image deleted', '圖片已刪除');
+  String get excluded => _t('视频已排除播放', 'Video excluded', '視頻已排除播放');
+  String get deleted => _t('视频已删除', 'Video deleted', '視頻已刪除');
   String get shortcutTitle => _t('内置快捷键', 'Shortcuts', '內置快捷鍵');
   String get spaceKey => _t('空格', 'Space', '空格');
   String get playPause => _t('播放/暂停', 'Play / Pause', '播放/暫停');
-  String get previous => _t('上一张', 'Previous', '上一張');
-  String get next => _t('下一张', 'Next', '下一張');
+  String get previous => _t('上一个', 'Previous', '上一個');
+  String get next => _t('下一个', 'Next', '下一個');
   String get exitFullscreen => _t('退出全屏', 'Exit Fullscreen', '退出全屏');
   String get exitPlayback => _t('退出播放', 'Exit Playback', '退出播放');
   String get enterFullscreen => _t('全屏', 'Fullscreen', '全屏');
@@ -211,33 +207,31 @@ class AppLocalizations {
   String get zoomIn => _t('放大', 'Zoom In', '放大');
   String get zoomOut => _t('缩小', 'Zoom Out', '縮小');
   String get fitScreen => _t('适应屏幕', 'Fit Screen', '適應屏幕');
-  String get customIntervalLabel =>
-      _t('自定义换片时间：', 'Custom interval:', '自訂換片時間：');
   String get errorRange => _t(
     '须为大于1且小于65535的整数',
     'Enter a number between 2 and 65534',
     '須為大於1且小於65535的整數',
   );
   String get msgSelectFolderFirst =>
-      _t('请先设置要播放幻灯的图片目录', 'Select folders first', '請先設置要播放幻燈的圖片目錄');
+      _t('请先设置要播放的视频目录', 'Select folders first', '請先設置要播放的視頻目錄');
   String get msgReselectFolder =>
-      _t('选定的目录下没有图片，请重新选择', 'No images, please reselect', '選定目錄下沒有圖片，請重新選擇');
+      _t('选定的目录下没有视频，请重新选择', 'No videos, please reselect', '選定目錄下沒有視頻，請重新選擇');
   String get msgScanError =>
-      _t('扫描图片失败，请重试', 'Scan failed, please retry', '掃描圖片失敗，請重試');
+      _t('扫描视频失败，请重试', 'Scan failed, please retry', '掃描視頻失敗，請重試');
   String get msgAutoScanError => _t('自动扫描失败', 'Auto-scan failed', '自動掃描失敗');
   String get back => _t('返回', 'Back', '返回');
 
   // 其余页面补充
-  String get selectDirWithImages =>
-      _t('请选择一个包含图片的目录', 'Select a folder with images', '請選擇一個包含圖片的目錄');
+  String get selectDirWithVideos =>
+      _t('请选择一个包含视频的目录', 'Select a folder with videos', '請選擇一個包含視頻的目錄');
   String get unknown => _t('未知', 'Unknown', '未知');
   String get deleteFileLabel => _t('删除文件', 'Delete File', '刪除文件');
   String get needPermissionToRead =>
-      _t('需要存储权限才能读取图片', 'Storage permission required', '需要存儲權限才能讀取圖片');
-  String imagesTotal(int c) => _t('共 $c 张图片', '$c images', '共 $c 張圖片');
-  String imagesCount(int c) => _t('$c 张图片', '$c images', '$c 張圖片');
-  String includesImages(int c) =>
-      _t('包含 $c 张图片', 'Includes $c images', '包含 $c 張圖片');
+      _t('需要存储权限才能读取视频', 'Storage permission required', '需要存儲權限才能讀取視頻');
+  String videosTotal(int c) => _t('共 $c 个视频', '$c videos', '共 $c 個視頻');
+  String videosCount(int c) => _t('$c 个视频', '$c videos', '$c 個視頻');
+  String includesVideos(int c) =>
+      _t('包含 $c 个视频', 'Includes $c videos', '包含 $c 個視頻');
   String filesCount(int c) => _t('包含$c个文件', '$c files', '包含$c個文件');
   String folderContentCount(int subfolders, int files) => _t(
     '包含$subfolders个子文件夹，共$files个文件',
@@ -247,25 +241,25 @@ class AppLocalizations {
 
   // 消息
   String msgScanComplete(int c) =>
-      _t('扫描完成，共 $c 张图片', 'Done: $c images', '掃描完成，共 $c 張圖片');
-  String get msgNoImages => _t('选定的目录下没有图片', 'No images found', '選定目錄下沒有圖片');
+      _t('扫描完成，共 $c 个视频', 'Done: $c videos', '掃描完成，共 $c 個視頻');
+  String get msgNoVideos => _t('选定的目录下没有视频', 'No videos found', '選定目錄下沒有視頻');
   String get msgAddFolderFirst => _t('请先添加文件夹', 'Add folders first', '請先添加文件夾');
   String get msgNeedPermission =>
       _t('需要存储读取权限', 'Permission required', '需要存儲讀取權限');
   String get msgNoAlbumsFound =>
-      _t('未找到包含图片的相册', 'No albums found', '未找到包含圖片的相冊');
+      _t('未找到包含视频的相册', 'No albums found', '未找到包含視頻的相冊');
   String msgScanFailed(Object e) => _t('扫描失败: $e', 'Failed: $e', '掃描失敗: $e');
 
-  // 排除图片浏览
-  String get excludedFolder => _t('已排除的图片', 'Excluded Images', '已排除的圖片');
-  String get noExcludedImages =>
-      _t('没有已排除的图片', 'No excluded images', '沒有已排除的圖片');
-  String get imageRestored => _t('图片已恢复', 'Image restored', '圖片已恢復');
-  String get allImagesRestored =>
-      _t('所有图片已恢复', 'All images restored', '所有圖片已恢復');
+  // 排除视频浏览
+  String get excludedFolder => _t('已排除的视频', 'Excluded Videos', '已排除的視頻');
+  String get noExcludedVideos =>
+      _t('没有已排除的视频', 'No excluded videos', '沒有已排除的視頻');
+  String get videoRestored => _t('视频已恢复', 'Video restored', '視頻已恢復');
+  String get allVideosRestored =>
+      _t('所有视频已恢复', 'All videos restored', '所有視頻已恢復');
   String get restoreAll => _t('恢复全部', 'Restore All', '恢復全部');
   String get excludeFolderVirtual => _t('已排除的文件', 'Excluded Files', '已排除的文件');
-  String get deleteImage => _t('删除', 'Delete', '刪除');
+  String get deleteVideo => _t('删除', 'Delete', '刪除');
   String get moveTo => _t('移动到', 'Move To', '移動到');
   String get copyTo => _t('复制到', 'Copy To', '複製到');
   String get restore => _t('恢复', 'Restore', '恢復');
@@ -282,9 +276,9 @@ class AppLocalizations {
   String get deletedAllToTrash =>
       _t('全部已移入回收站', 'All moved to trash', '全部已移入回收站');
 
-  // 文件夹图片浏览
-  String get noImagesInFolder =>
-      _t('此文件夹中没有图片', 'No images in this folder', '此文件夾中沒有圖片');
+  // 文件夹视频浏览
+  String get noVideosInFolder =>
+      _t('此文件夹中没有视频', 'No videos in this folder', '此文件夾中沒有視頻');
   String get sortSequential => _t('顺序', 'Ascending', '順序');
   String get sortReverse => _t('逆序', 'Descending', '逆序');
   String get sortNewest => _t('最新', 'Newest', '最新');
@@ -297,42 +291,39 @@ class AppLocalizations {
   String get helpAboutSection => _t('关于', 'About', '關於');
   String get helpSponsorSection => _t('赞助', 'Sponsor', '贊助');
   String get helpGroupPlay => _t('播放控制', 'Playback', '播放控制');
-  String get helpGroupDisplay => _t('图片显示', 'Image Display', '圖片顯示');
+  String get helpGroupDisplay => _t('视频显示', 'Video Display', '視頻顯示');
   String get helpGroupTransition => _t('切换动画', 'Transitions', '切換動畫');
   String get helpGroupFullscreen =>
       _t('全屏与工具栏', 'Fullscreen & Toolbar', '全屏與工具欄');
-  String get helpGroupFolders => _t('多目录与图片管理', 'Folders & Images', '多目錄與圖片管理');
+  String get helpGroupFolders => _t('多目录与视频管理', 'Folders & Videos', '多目錄與視頻管理');
   String get helpPlayOrder => _t(
-    '多种播放顺序：顺序、逆序、由新到旧、由旧到新、随机、新图优先',
+    '多种播放顺序：顺序、逆序、由新到旧、由旧到新、随机、新视频优先',
     'Play orders: ascending, descending, newest first, oldest first, random, new-first',
-    '多種播放順序：順序、逆序、由新到舊、由舊到新、隨機、新圖優先',
+    '多種播放順序：順序、逆序、由新到舊、由舊到新、隨機、新視頻優先',
   );
   String get helpLoopAuto => _t(
     '循环播放与自动播放可分别开关',
     'Loop and auto-play can be toggled separately',
     '循環播放與自動播放可分別開關',
   );
-  String get helpInterval => _t(
-    '换片时间可调：预设 1 秒～10 分钟，也可自定义（2～65534 秒）',
-    'Interval: presets from 1s to 10min, or a custom value (2–65534s)',
-    '換片時間可調：預設 1 秒～10 分鐘，也可自訂（2～65534 秒）',
+  String get helpGestures => _t(
+    '手势：上下滑动切换视频，左右滑动拖动进度条，点击画面显示或隐藏工具栏',
+    'Gestures: swipe up/down to switch videos, swipe left/right to seek, tap to toggle the toolbar',
+    '手勢：上下滑動切換視頻，左右滑動拖動進度條，點擊畫面顯示或隱藏工具欄',
   );
-  String get helpPauseZoom => _t(
-    '可随时暂停/继续；放大查看时自动暂停，点击播放即切到下一张',
-    'Pause or resume anytime; auto-pauses while zoomed, next slide on play',
-    '可隨時暫停/繼續；放大檢視時自動暫停，點擊播放即切到下一張',
-  );
+  String get helpPlayPause =>
+      _t('可随时暂停或继续播放', 'Pause or resume anytime', '可隨時暫停或繼續播放');
   String get helpFitMode => _t(
-    '填充模式：适应窗口、填满窗口、原图大小',
+    '填充模式：适应窗口、填满窗口、原始大小',
     'Fit modes: fit window, fill window, original size',
-    '填充模式：適應窗口、填滿窗口、原圖大小',
+    '填充模式：適應窗口、填滿窗口、原始大小',
   );
   String get helpBackground =>
       _t('背景色：黑色、深灰、白色', 'Background: black, dark gray, white', '背景色：黑色、深灰、白色');
   String get helpOrientation => _t(
-    '屏幕方向：横屏、竖屏、跟随系统、跟随图片',
-    'Orientation: landscape, portrait, follow system, follow image',
-    '螢幕方向：橫屏、豎屏、跟隨系統、跟隨圖片',
+    '屏幕方向：横屏、竖屏、跟随系统、跟随视频',
+    'Orientation: landscape, portrait, follow system, follow video',
+    '螢幕方向：橫屏、豎屏、跟隨系統、跟隨視頻',
   );
   String get helpZoomPan => _t(
     '缩放与平移：滚轮、触控板捏合或手势缩放（1～5 倍），放大后可左键拖动，右键呼出放大/缩小/适应屏幕/旋转菜单',
@@ -340,9 +331,9 @@ class AppLocalizations {
     '縮放與平移：滾輪、觸控板捏合或手勢縮放（1～5 倍），放大後可左鍵拖動，右鍵呼出放大/縮小/適應屏幕/旋轉選單',
   );
   String get helpWheel => _t(
-    '鼠标滚轮可设为切换图片或缩放图片，按住 Ctrl（或 Shift）滚动执行相反操作',
+    '鼠标滚轮可设为切换视频或缩放视频，按住 Ctrl（或 Shift）滚动执行相反操作',
     'The wheel can switch or zoom; hold Ctrl (or Shift) to do the opposite',
-    '滑鼠滾輪可設為切換圖片或縮放圖片，按住 Ctrl（或 Shift）滾動執行相反操作',
+    '滑鼠滾輪可設為切換視頻或縮放視頻，按住 Ctrl（或 Shift）滾動執行相反操作',
   );
   String get helpTransition => _t(
     '淡入淡出、左右滑动、上下滑动、无动画',
@@ -370,24 +361,24 @@ class AppLocalizations {
     '可添加多個文件夾，可選擇是否包含子文件夾，自動去重並統計數量',
   );
   String get helpFormats => _t(
-    '支持 JPG、JPEG、PNG、WebP、BMP、GIF、TIFF 等常见格式',
-    'Supports JPG, JPEG, PNG, WebP, BMP, GIF, TIFF and more',
-    '支援 JPG、JPEG、PNG、WebP、BMP、GIF、TIFF 等常見格式',
+    '支持 MP4、M4V、MOV、MKV、WebM 等常见格式',
+    'Supports MP4, M4V, MOV, MKV, WebM and more',
+    '支援 MP4、M4V、MOV、MKV、WebM 等常見格式',
   );
   String get helpExclude => _t(
-    '排除播放：把不想看的图片移出播放列表（不删除文件），已排除的图片可恢复或实际删除，也可以移动或者复制到其他位置',
-    'Exclude: remove images from the playlist without deleting files; excluded images can be restored or deleted, and can also be moved or copied elsewhere',
-    '排除播放：把不想看的圖片移出播放列表（不刪除檔案），已排除的圖片可恢復或實際刪除，也可以移動或者複製到其他位置',
+    '排除播放：把不想看的视频移出播放列表（不删除文件），已排除的视频可恢复或实际删除，也可以移动或者复制到其他位置',
+    'Exclude: remove videos from the playlist without deleting files; excluded videos can be restored or deleted, and can also be moved or copied elsewhere',
+    '排除播放：把不想看的視頻移出播放列表（不刪除檔案），已排除的視頻可恢復或實際刪除，也可以移動或者複製到其他位置',
   );
   String get helpBrowse => _t(
-    '瀑布流浏览：点击任意图片即可播放当前文件夹；文件夹右侧可直接播放该文件夹',
-    'Grid browsing: tap any image to play the folder, or use the folder play button',
-    '瀑布流瀏覽：點擊任意圖片即可播放當前文件夾；文件夾右側可直接播放該文件夾',
+    '瀑布流浏览：点击任意视频即可播放当前文件夹；文件夹右侧可直接播放该文件夹',
+    'Grid browsing: tap any video to play the folder, or use the folder play button',
+    '瀑布流瀏覽：點擊任意視頻即可播放當前文件夾；文件夾右側可直接播放該文件夾',
   );
   String get helpInfoDisplay => _t(
-    '可显示文件名、大小、分辨率与页码，并支持自动隐藏',
-    'Shows file name, size, resolution and page number, with auto-hide',
-    '可顯示檔案名稱、大小、解析度與頁碼，並支援自動隱藏',
+    '可显示文件名、大小、分辨率与序号，并支持自动隐藏',
+    'Shows file name, size, resolution and index, with auto-hide',
+    '可顯示檔案名稱、大小、解析度與序號，並支援自動隱藏',
   );
   String get helpVersionLabel => _t('版本', 'Version', '版本');
   String get helpGitHub =>

@@ -15,7 +15,7 @@ enum PlayOrder {
   reverseSequential, // 逆序播放（按文件名降序）
 }
 
-enum ImageFitMode { contain, cover, original }
+enum VideoFitMode { contain, cover, original }
 
 enum BackgroundColor { black, darkGray, white }
 
@@ -26,25 +26,23 @@ enum DeleteAction {
   delete, // 实际删除
 }
 
-enum ImageOrientation {
+enum VideoOrientation {
   landscape, // 横屏
   portrait, // 竖屏
   followSystem, // 跟随系统
-  followImage, // 跟随图片
+  followVideo, // 跟随视频
 }
 
 class SettingsProvider extends ChangeNotifier {
   // 播放基础设置
-  // 换片时间的滑块档位值（毫秒），自定义开关关闭时生效
-  int _interval = 4000;
   PlayOrder _playOrder = PlayOrder.newPreferred;
   bool _loopPlay = false;
   bool _autoPlay = true;
 
-  // 图片显示设置
-  ImageFitMode _imageFitMode = ImageFitMode.contain;
+  // 视频显示设置
+  VideoFitMode _videoFitMode = VideoFitMode.contain;
   BackgroundColor _backgroundColor = BackgroundColor.black;
-  ImageOrientation _imageOrientation = ImageOrientation.followSystem;
+  VideoOrientation _videoOrientation = VideoOrientation.followSystem;
 
   // 切换动画
   TransitionAnimation _transitionAnimation = TransitionAnimation.fade;
@@ -63,12 +61,12 @@ class SettingsProvider extends ChangeNotifier {
   List<String> _lastFolderPaths = [];
 
   // 信息显示设置
-  bool _showImageInfo = false;
+  bool _showVideoInfo = false;
   bool _infoAutoHide = true;
   int _infoHideDelay = 3;
 
   // 快捷键与控制
-  bool _wheelSwitchImage = true;
+  bool _wheelSwitchVideo = true;
 
   // 删除行为设置
   DeleteAction _deleteAction = DeleteAction.exclude;
@@ -77,27 +75,14 @@ class SettingsProvider extends ChangeNotifier {
   // 语言设置（0=跟随系统, 1=简体中文, 2=English, 3=繁體中文）
   int _languageIndex = 0;
 
-  // 自定义换片时间（毫秒），默认1800秒 = 1800000ms，开关打开时生效
-  int _customInterval = 1800000;
-
-  // 是否启用自定义换片时间：开启时 _customInterval 生效，_interval 仅保留滑块位置
-  bool _useCustomInterval = false;
-
   // Getters
-  /// 换片时间的生效值：自定义开关开启时取自定义秒数，否则取滑块档位值
-  int get interval => _useCustomInterval ? _customInterval : _interval;
-
-  /// 滑块档位值（自定义开启时仅保留位置，不参与生效）
-  int get presetInterval => _interval;
-  int get customInterval => _customInterval;
-  bool get useCustomInterval => _useCustomInterval;
   List<String> get excludedPaths => List.unmodifiable(_excludedPaths);
   PlayOrder get playOrder => _playOrder;
   bool get loopPlay => _loopPlay;
   bool get autoPlay => _autoPlay;
-  ImageFitMode get imageFitMode => _imageFitMode;
+  VideoFitMode get videoFitMode => _videoFitMode;
   BackgroundColor get backgroundColor => _backgroundColor;
-  ImageOrientation get imageOrientation => _imageOrientation;
+  VideoOrientation get videoOrientation => _videoOrientation;
   TransitionAnimation get transitionAnimation => _transitionAnimation;
   double get animationDuration => _animationDuration;
   bool get startFullscreen => _startFullscreen;
@@ -109,26 +94,14 @@ class SettingsProvider extends ChangeNotifier {
   String? get lastFolderPath => _lastFolderPath;
   List<String> get lastFolderPaths => _lastFolderPaths;
 
-  bool get showImageInfo => _showImageInfo;
+  bool get showVideoInfo => _showVideoInfo;
   bool get infoAutoHide => _infoAutoHide;
   int get infoHideDelay => _infoHideDelay;
-  bool get wheelSwitchImage => _wheelSwitchImage;
+  bool get wheelSwitchVideo => _wheelSwitchVideo;
   DeleteAction get deleteAction => _deleteAction;
   int get languageIndex => _languageIndex;
 
   // Setters
-  void setPresetInterval(int value) {
-    _interval = value;
-    notifyListeners();
-    _saveSettings();
-  }
-
-  void setUseCustomInterval(bool value) {
-    _useCustomInterval = value;
-    notifyListeners();
-    _saveSettings();
-  }
-
   void setPlayOrder(PlayOrder value) {
     _playOrder = value;
     notifyListeners();
@@ -147,8 +120,8 @@ class SettingsProvider extends ChangeNotifier {
     _saveSettings();
   }
 
-  void setImageFitMode(ImageFitMode value) {
-    _imageFitMode = value;
+  void setVideoFitMode(VideoFitMode value) {
+    _videoFitMode = value;
     notifyListeners();
     _saveSettings();
   }
@@ -159,8 +132,8 @@ class SettingsProvider extends ChangeNotifier {
     _saveSettings();
   }
 
-  void setImageOrientation(ImageOrientation value) {
-    _imageOrientation = value;
+  void setVideoOrientation(VideoOrientation value) {
+    _videoOrientation = value;
     notifyListeners();
     _saveSettings();
   }
@@ -219,8 +192,8 @@ class SettingsProvider extends ChangeNotifier {
     _saveSettings();
   }
 
-  void setShowImageInfo(bool value) {
-    _showImageInfo = value;
+  void setShowVideoInfo(bool value) {
+    _showVideoInfo = value;
     notifyListeners();
     _saveSettings();
   }
@@ -237,8 +210,8 @@ class SettingsProvider extends ChangeNotifier {
     _saveSettings();
   }
 
-  void setWheelSwitchImage(bool value) {
-    _wheelSwitchImage = value;
+  void setWheelSwitchVideo(bool value) {
+    _wheelSwitchVideo = value;
     notifyListeners();
     _saveSettings();
   }
@@ -251,12 +224,6 @@ class SettingsProvider extends ChangeNotifier {
 
   void setLanguageIndex(int value) {
     _languageIndex = value;
-    notifyListeners();
-    _saveSettings();
-  }
-
-  void setCustomInterval(int value) {
-    _customInterval = value;
     notifyListeners();
     _saveSettings();
   }
@@ -283,12 +250,12 @@ class SettingsProvider extends ChangeNotifier {
 
   // 获取BoxFit枚举
   BoxFit get boxFit {
-    switch (_imageFitMode) {
-      case ImageFitMode.contain:
+    switch (_videoFitMode) {
+      case VideoFitMode.contain:
         return BoxFit.contain;
-      case ImageFitMode.cover:
+      case VideoFitMode.cover:
         return BoxFit.cover;
-      case ImageFitMode.original:
+      case VideoFitMode.original:
         return BoxFit.none;
     }
   }
@@ -308,12 +275,11 @@ class SettingsProvider extends ChangeNotifier {
   // 加载设置
   Future<void> loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
-    _interval = prefs.getInt('interval') ?? 4000;
     _playOrder = PlayOrder
         .values[prefs.getInt('playOrder') ?? PlayOrder.newPreferred.index];
     _loopPlay = prefs.getBool('loopPlay') ?? false;
     _autoPlay = prefs.getBool('autoPlay') ?? true;
-    _imageFitMode = ImageFitMode.values[prefs.getInt('imageFitMode') ?? 0];
+    _videoFitMode = VideoFitMode.values[prefs.getInt('videoFitMode') ?? 0];
     _backgroundColor =
         BackgroundColor.values[prefs.getInt('backgroundColor') ?? 0];
     // 下标做边界保护：旧版本枚举里还有 slideRight/slideDown，
@@ -335,7 +301,7 @@ class SettingsProvider extends ChangeNotifier {
     if (lastFolderPathsStr != null) {
       _lastFolderPaths = json.decode(lastFolderPathsStr).cast<String>();
     }
-    _showImageInfo = prefs.getBool('showImageInfo') ?? false;
+    _showVideoInfo = prefs.getBool('showVideoInfo') ?? false;
     _infoAutoHide = prefs.getBool('infoAutoHide') ?? true;
     _infoHideDelay = prefs.getInt('infoHideDelay') ?? 3;
 
@@ -344,13 +310,11 @@ class SettingsProvider extends ChangeNotifier {
       _excludedPaths = json.decode(excludedStr).cast<String>();
     }
 
-    _wheelSwitchImage = prefs.getBool('wheelSwitchImage') ?? true;
+    _wheelSwitchVideo = prefs.getBool('wheelSwitchVideo') ?? true;
     _deleteAction = DeleteAction.values[prefs.getInt('deleteAction') ?? 0];
-    _imageOrientation =
-        ImageOrientation.values[prefs.getInt('imageOrientation') ?? 2];
+    _videoOrientation =
+        VideoOrientation.values[prefs.getInt('videoOrientation') ?? 2];
     _languageIndex = prefs.getInt('languageIndex') ?? 0;
-    _customInterval = prefs.getInt('customInterval') ?? 1800000;
-    _useCustomInterval = prefs.getBool('useCustomInterval') ?? false;
 
     notifyListeners();
   }
@@ -358,11 +322,10 @@ class SettingsProvider extends ChangeNotifier {
   // 保存设置
   Future<void> _saveSettings() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('interval', _interval);
     await prefs.setInt('playOrder', _playOrder.index);
     await prefs.setBool('loopPlay', _loopPlay);
     await prefs.setBool('autoPlay', _autoPlay);
-    await prefs.setInt('imageFitMode', _imageFitMode.index);
+    await prefs.setInt('videoFitMode', _videoFitMode.index);
     await prefs.setInt('backgroundColor', _backgroundColor.index);
     await prefs.setInt('transitionAnimation', _transitionAnimation.index);
     await prefs.setDouble('animationDuration', _animationDuration);
@@ -375,14 +338,12 @@ class SettingsProvider extends ChangeNotifier {
     await prefs.setString('lastFolderPath', _lastFolderPath ?? '');
     await prefs.setString('lastFolderPaths', json.encode(_lastFolderPaths));
     await prefs.setInt('deleteAction', _deleteAction.index);
-    await prefs.setBool('showImageInfo', _showImageInfo);
+    await prefs.setBool('showVideoInfo', _showVideoInfo);
     await prefs.setInt('languageIndex', _languageIndex);
-    await prefs.setInt('customInterval', _customInterval);
-    await prefs.setBool('useCustomInterval', _useCustomInterval);
     await prefs.setBool('infoAutoHide', _infoAutoHide);
     await prefs.setInt('infoHideDelay', _infoHideDelay);
-    await prefs.setBool('wheelSwitchImage', _wheelSwitchImage);
+    await prefs.setBool('wheelSwitchVideo', _wheelSwitchVideo);
     await prefs.setString('excludedPaths', json.encode(_excludedPaths));
-    await prefs.setInt('imageOrientation', _imageOrientation.index);
+    await prefs.setInt('videoOrientation', _videoOrientation.index);
   }
 }

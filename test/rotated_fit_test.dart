@@ -5,9 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:steam_flow/utils/rotated_fit.dart';
 
-/// 同步返回固定尺寸图片的 [ImageProvider]。
+/// 同步返回固定尺寸图像的 [ImageProvider]。
 ///
-/// 测试里的图片解码/读盘都是异步的，一来容易在不同环境挂起，
+/// 测试里的图像解码/读盘都是异步的，一来容易在不同环境挂起，
 /// 二来与「布局尺寸」这个被测量对象无关；用同步提供器只保留待验证的布局行为。
 class _FixedImageProvider extends ImageProvider<_FixedImageProvider> {
   _FixedImageProvider(this.image);
@@ -27,7 +27,7 @@ class _FixedImageProvider extends ImageProvider<_FixedImageProvider> {
   );
 }
 
-/// 同步创建一张指定尺寸的图片。
+/// 同步创建一张指定尺寸的图像。
 ui.Image _makeImage(int width, int height, Color color) {
   final recorder = ui.PictureRecorder();
   final canvas = Canvas(recorder);
@@ -46,7 +46,7 @@ void main() {
     const portrait = Size(720, 1280);
     const landscape = Size(1280, 720);
 
-    test('contain + 旋转 90° 时，图片短边占满屏幕短边', () {
+    test('contain + 旋转 90° 时，图像短边占满屏幕短边', () {
       final size = layoutRotatedFitSize(
         intrinsic: portrait,
         viewport: viewport,
@@ -54,7 +54,7 @@ void main() {
         quarterTurns: 1,
       );
 
-      // 屏幕短边为 1440，旋转后图片的短边也必须贴满 1440。
+      // 屏幕短边为 1440，旋转后图像的短边也必须贴满 1440。
       expect(size.shortestSide, closeTo(1440, 0.01));
       // 等比放大到极限：宽 2560 = 1440 * (1280 / 720)
       expect(size.width, closeTo(2560, 0.01));
@@ -122,12 +122,12 @@ void main() {
     });
   });
 
-  testWidgets('RotatedBox + Image 在旋转后让图片短边贴满屏幕短边', (tester) async {
+  testWidgets('RotatedBox + Image 在旋转后让图像短边贴满屏幕短边', (tester) async {
     const viewport = Size(344, 144);
     const fit = BoxFit.contain;
     const intrinsic = Size(72, 128);
 
-    // 同步的假图片，避免真实文件解码带来的异步等待与挂起。
+    // 同步的假图像，避免真实文件解码带来的异步等待与挂起。
     final image = _makeImage(72, 128, const Color(0xFFC83C3C));
     addTearDown(image.dispose);
     final provider = _FixedImageProvider(image);
@@ -182,7 +182,7 @@ void main() {
         reason: 'turns=$turns 几何算法与真实绘制结果不符',
       );
 
-      // 用户可见的要求：旋转后图片短边必须贴满屏幕短边。
+      // 用户可见的要求：旋转后图像短边必须贴满屏幕短边。
       if (turns.isOdd) {
         expect(
           paintedInScreen.shortestSide,

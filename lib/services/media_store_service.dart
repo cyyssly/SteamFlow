@@ -1,18 +1,18 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:steam_flow/models/image_item.dart';
+import 'package:steam_flow/models/video_item.dart';
 
 class AlbumInfo {
   final String path;
   final String name;
-  final int imageCount;
+  final int videoCount;
   final String? thumbnailPath;
 
   AlbumInfo({
     required this.path,
     required this.name,
-    required this.imageCount,
+    required this.videoCount,
     this.thumbnailPath,
   });
 }
@@ -20,33 +20,30 @@ class AlbumInfo {
 class MediaStoreService {
   static const _channel = MethodChannel('com.cyyssly.steamflow/media_store');
 
-  /// 查询设备上所有包含图片的相册（Android 专用）
-  static Future<List<AlbumInfo>> getImageAlbums() async {
+  /// 查询设备上所有包含视频的相册（Android 专用）
+  static Future<List<AlbumInfo>> getVideoAlbums() async {
     if (!Platform.isAndroid) return [];
 
     try {
-      final result = await _channel.invokeMethod('getImageAlbums');
+      final result = await _channel.invokeMethod('getVideoAlbums');
       if (result == null) return [];
 
       final List<dynamic> albums = result as List<dynamic>;
       debugPrint(
-        '[MediaStoreService] getImageAlbums: received ${albums.length} albums from native',
+        '[MediaStoreService] getVideoAlbums: received ${albums.length} albums from native',
       );
       return albums.map((album) {
         final map = Map<String, dynamic>.from(album as Map);
-        debugPrint(
-          '[MediaStoreService]   - ${map["name"]}: ${map["path"]} (${map["imageCount"]} images)',
-        );
         return AlbumInfo(
           path: map['path'] as String,
           name: map['name'] as String,
-          imageCount: map['imageCount'] as int,
+          videoCount: map['videoCount'] as int,
           thumbnailPath: map['thumbnailPath'] as String?,
         );
       }).toList();
     } catch (e) {
       debugPrint(
-        '[MediaStoreService] getImageAlbums failed, falling back to scan: $e',
+        '[MediaStoreService] getVideoAlbums failed, falling back to scan: $e',
       );
       // 如果 MethodChannel 不可用，回退到系统目录扫描
       return _fallbackScan();
@@ -65,41 +62,44 @@ class MediaStoreService {
     }
   }
 
-  /// 通过原生端读取图片字节数据（绕过 Scoped Storage 限制）
-  static Future<Uint8List?> readImageBytes(String path) async {
-    if (!Platform.isAndroid) {
-      try {
-        return await File(path).readAsBytes();
-      } catch (_) {
-        return null;
-      }
-    }
+  /// 通过原生端取视频首帧缩略图（Android 专用）。
+  ///
+  /// [path] 既可以是文件路径，也可以是相册返回的 content:// URI。
+  /// 返回的宽高是**真实帧尺寸**（原生侧等比缩放，不裁剪、不留黑边），
+  /// 可直接用于推导宽高比。取帧失败时返回 null。
+  static Future<({Uint8List bytes, int width, int height})?> getVideoThumbnail(
+    String path,
+  ) async {
+    if (!Platform.isAndroid) return null;
     try {
-      final result = await _channel.invokeMethod('readImageBytes', {
+      final result = await _channel.invokeMethod('getVideoThumbnail', {
         'path': path,
       });
       if (result == null) return null;
-      return (result as Uint8List);
-    } catch (_) {
-      // 回退到直接文件读取
-      try {
-        return await File(path).readAsBytes();
-      } catch (_) {
-        return null;
-      }
+      final map = Map<String, dynamic>.from(result as Map);
+      final bytes = map['bytes'];
+      if (bytes is! Uint8List || bytes.isEmpty) return null;
+      return (
+        bytes: bytes,
+        width: (map['width'] as num?)?.toInt() ?? 0,
+        height: (map['height'] as num?)?.toInt() ?? 0,
+      );
+    } catch (e) {
+      debugPrint('[MediaStoreService] getVideoThumbnail failed: $e');
+      return null;
     }
   }
 
-  /// 通过 MediaStore 查询指定文件夹下的所有图片路径（Android 专用）
+  /// 通过 MediaStore 查询指定文件夹下的所有视频路径（Android 专用）
   ///
-  /// 返回的 [ImageItem] 会带上 MediaStore 已索引好的宽高比，
-  /// 瀑布流因此无需再读原图解析尺寸（手机上这一步非常慢）。
-  /// 若 MediaStore 未索引到尺寸，[ImageItem.aspectRatio] 为 null，
-  /// 由调用方回退到读取文件头解析。
-  static Future<List<ImageItem>> getFolderImages(String folderPath) async {
+  /// 返回的 [VideoItem] 会带上 MediaStore 已索引好的宽高比，
+  /// 瀑布流因此无需再解码首帧来取得尺寸（手机上这一步非常慢）。
+  /// 若 MediaStore 未索引到尺寸，[VideoItem.aspectRatio] 为 null，
+  /// 由调用方回退到取视频首帧推导。
+  static Future<List<VideoItem>> getFolderVideos(String folderPath) async {
     if (!Platform.isAndroid) return [];
     try {
-      final result = await _channel.invokeMethod('getFolderImages', {
+      final result = await _channel.invokeMethod('getFolderVideos', {
         'folderPath': folderPath,
       });
       if (result == null) return [];
@@ -107,19 +107,19 @@ class MediaStoreService {
       return list.map((item) {
         final map = Map<String, dynamic>.from(item as Map);
         final ratio = map['aspectRatio'];
-        return ImageItem(
+        return VideoItem(
           name: map['name'] as String,
           path: map['path'] as String,
           aspectRatio: ratio is num ? ratio.toDouble() : null,
         );
       }).toList();
     } catch (e) {
-      debugPrint('[MediaStoreService] getFolderImages failed: $e');
+      debugPrint('[MediaStoreService] getFolderVideos failed: $e');
       return [];
     }
   }
 
-  /// 把图片移入系统回收站（而不是永久删除）
+  /// 把视频移入系统回收站（而不是永久删除）
   /// - Android 11+：通过 MediaStore.createTrashRequest 移入系统回收站（图库可见）
   /// - Android 10 及以下：回退到直接删除
   /// - Windows：通过 PowerShell 调用 Microsoft.VisualBasic 移入回收站
@@ -189,65 +189,54 @@ foreach (\$p in \$paths) {
     return allOk;
   }
 
-  /// 回退方案：扫描常见图片目录（含子目录）
+  /// 回退方案：扫描常见视频目录（含子目录）
   static Future<List<AlbumInfo>> _fallbackScan() async {
     if (!Platform.isAndroid) return [];
 
     const commonDirs = [
       '/storage/emulated/0/DCIM/Camera',
-      '/storage/emulated/0/DCIM/Screenshots',
-      '/storage/emulated/0/DCIM',
-      '/storage/emulated/0/Pictures',
-      '/storage/emulated/0/Pictures/Screenshots',
-      '/storage/emulated/0/Download',
       '/storage/emulated/0/Movies',
-      '/storage/emulated/0/WhatsApp/Media/WhatsApp Images',
-      '/storage/emulated/0/WhatsApp/Media/WhatsApp Images/Sent',
-      '/storage/emulated/0/Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Images',
-      '/storage/emulated/0/Telegram/Telegram Images',
-      '/storage/emulated/0/WeiXin',
+      '/storage/emulated/0/Movies/ScreenRecorder',
+      '/storage/emulated/0/Movies/Telegram',
+      '/storage/emulated/0/Movies/WeiXin',
+      '/storage/emulated/0/DCIM',
+      '/storage/emulated/0/Download',
+      '/storage/emulated/0/Pictures',
+      '/storage/emulated/0/WhatsApp/Media/WhatsApp Video',
+      '/storage/emulated/0/WhatsApp/Media/WhatsApp Video/Sent',
+      '/storage/emulated/0/Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Video',
+      '/storage/emulated/0/Telegram/Telegram Video',
       '/storage/emulated/0/tencent/MicroMsg/WeiXin',
-      '/storage/emulated/0/Pictures/WeiXin',
-      '/storage/emulated/0/DCIM/WeiXin',
+      '/storage/emulated/0/WeiXin',
       '/storage/emulated/0/Snapchat',
       '/storage/emulated/0/Instagram',
       '/storage/emulated/0/Facebook',
       '/storage/emulated/0/Twitter',
       '/storage/emulated/0/Reddit',
       '/storage/emulated/0/Bluetooth',
-      '/storage/emulated/0/Ringtones',
     ];
 
-    const supportedExtensions = {
-      'jpg',
-      'jpeg',
-      'png',
-      'webp',
-      'bmp',
-      'gif',
-      'tiff',
-      'tif',
-    };
+    const supportedExtensions = {'mp4', 'm4v', 'mov', 'mkv', 'webm'};
 
     final albums = <AlbumInfo>[];
 
-    Future<({int count, String? firstImage})> scanDir(String dirPath) async {
+    Future<({int count, String? firstVideo})> scanDir(String dirPath) async {
       int count = 0;
-      String? firstImage;
+      String? firstVideo;
       final dir = Directory(dirPath);
-      if (!await dir.exists()) return (count: 0, firstImage: null);
+      if (!await dir.exists()) return (count: 0, firstVideo: null);
       try {
         await for (final entity in dir.list(recursive: false)) {
           if (entity is File) {
             final ext = entity.path.split('.').last.toLowerCase();
             if (supportedExtensions.contains(ext)) {
               count++;
-              firstImage ??= entity.path;
+              firstVideo ??= entity.path;
             }
           }
         }
       } catch (_) {}
-      return (count: count, firstImage: firstImage);
+      return (count: count, firstVideo: firstVideo);
     }
 
     // 1. 直接扫描每个常见目录本身
@@ -258,8 +247,8 @@ foreach (\$p in \$paths) {
           AlbumInfo(
             path: dirPath,
             name: dirPath.split('/').last,
-            imageCount: result.count,
-            thumbnailPath: result.firstImage,
+            videoCount: result.count,
+            thumbnailPath: result.firstVideo,
           ),
         );
       }
@@ -288,8 +277,8 @@ foreach (\$p in \$paths) {
                 AlbumInfo(
                   path: subDir.path,
                   name: subDir.path.split('/').last,
-                  imageCount: subResult.count,
-                  thumbnailPath: subResult.firstImage,
+                  videoCount: subResult.count,
+                  thumbnailPath: subResult.firstVideo,
                 ),
               );
             }
@@ -298,8 +287,8 @@ foreach (\$p in \$paths) {
       } catch (_) {}
     }
 
-    // 按图片数量降序排列
-    albums.sort((a, b) => b.imageCount.compareTo(a.imageCount));
+    // 按视频数量降序排列
+    albums.sort((a, b) => b.videoCount.compareTo(a.videoCount));
     return albums;
   }
 

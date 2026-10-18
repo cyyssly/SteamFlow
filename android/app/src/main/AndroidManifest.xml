@@ -1,7 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- 读取图片权限（Android 13+） -->
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <!-- Android 14+ 用户选择性授权访问部分照片 -->
+    <!-- 读取视频权限（Android 13+） -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <!-- Android 14+ 用户选择性授权访问部分视频 -->
     <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
     <!-- 读取存储权限（Android 12 及以下） -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"

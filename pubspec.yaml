@@ -1,7 +1,7 @@
 name: steam_flow
-description: "A cross-platform image slideshow application."
+description: "A cross-platform video player and slideshow application."
 publish_to: 'none'
-version: 0.1.0+1
+version: 1.0.0+1
 
 environment:
   sdk: ^3.12.2
@@ -23,6 +23,9 @@ dependencies:
   ffi: ^2.1.4
   vector_math: ^2.1.4
   wakelock_plus: ^1.5.2
+  media_kit: ^1.2.6
+  media_kit_video: ^2.0.1
+  media_kit_libs_video: ^1.0.7
 
 dev_dependencies:
   flutter_test:

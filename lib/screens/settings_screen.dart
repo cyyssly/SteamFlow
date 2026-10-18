@@ -72,16 +72,6 @@ class SettingsScreen extends StatelessWidget {
             builder: (context, settings, child) => Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildIntervalSetting(
-                  context,
-                  AppLocalizations.of(context).interval,
-                  settings.presetInterval,
-                  settings.customInterval,
-                  settings.useCustomInterval,
-                  (value) => settings.setPresetInterval(value),
-                  (value) => settings.setCustomInterval(value),
-                  (value) => settings.setUseCustomInterval(value),
-                ),
                 _buildDropdownSetting(
                   context,
                   AppLocalizations.of(context).playOrderMode,
@@ -139,11 +129,11 @@ class SettingsScreen extends StatelessWidget {
           ),
         ],
       ),
-      // 图片显示设置
+      // 视频显示设置
       _SettingsGroup(
         weight: 4,
         widgets: [
-          _buildSectionTitle(AppLocalizations.of(context).imageDisplay),
+          _buildSectionTitle(AppLocalizations.of(context).videoDisplay),
           Consumer<SettingsProvider>(
             builder: (context, settings, child) => Column(
               children: [
@@ -153,16 +143,16 @@ class SettingsScreen extends StatelessWidget {
                   [
                     (
                       AppLocalizations.of(context).contain,
-                      ImageFitMode.contain,
+                      VideoFitMode.contain,
                     ),
-                    (AppLocalizations.of(context).cover, ImageFitMode.cover),
+                    (AppLocalizations.of(context).cover, VideoFitMode.cover),
                     (
                       AppLocalizations.of(context).original,
-                      ImageFitMode.original,
+                      VideoFitMode.original,
                     ),
                   ],
-                  settings.imageFitMode,
-                  (value) => settings.setImageFitMode(value),
+                  settings.videoFitMode,
+                  (value) => settings.setVideoFitMode(value),
                 ),
                 _buildDropdownSetting(
                   context,
@@ -184,23 +174,23 @@ class SettingsScreen extends StatelessWidget {
                   [
                     (
                       AppLocalizations.of(context).landscape,
-                      ImageOrientation.landscape,
+                      VideoOrientation.landscape,
                     ),
                     (
                       AppLocalizations.of(context).portrait,
-                      ImageOrientation.portrait,
+                      VideoOrientation.portrait,
                     ),
                     (
                       AppLocalizations.of(context).followSystem,
-                      ImageOrientation.followSystem,
+                      VideoOrientation.followSystem,
                     ),
                     (
-                      AppLocalizations.of(context).followImage,
-                      ImageOrientation.followImage,
+                      AppLocalizations.of(context).followVideo,
+                      VideoOrientation.followVideo,
                     ),
                   ],
-                  settings.imageOrientation,
-                  (value) => settings.setImageOrientation(value),
+                  settings.videoOrientation,
+                  (value) => settings.setVideoOrientation(value),
                 ),
               ],
             ),
@@ -321,10 +311,10 @@ class SettingsScreen extends StatelessWidget {
               children: [
                 _buildSwitchSetting(
                   context,
-                  AppLocalizations.of(context).showImageInfo,
-                  AppLocalizations.of(context).showImageInfoDesc,
-                  settings.showImageInfo,
-                  (value) => settings.setShowImageInfo(value),
+                  AppLocalizations.of(context).showVideoInfo,
+                  AppLocalizations.of(context).showVideoInfoDesc,
+                  settings.showVideoInfo,
+                  (value) => settings.setShowVideoInfo(value),
                 ),
                 _buildSwitchSetting(
                   context,
@@ -362,13 +352,13 @@ class SettingsScreen extends StatelessWidget {
                     context,
                     AppLocalizations.of(context).wheelSwitch,
                     [
-                      (AppLocalizations.of(context).wheelSwitchImage, true),
+                      (AppLocalizations.of(context).wheelSwitchVideo, true),
                       (AppLocalizations.of(context).wheelZoom, false),
                     ],
-                    settings.wheelSwitchImage,
-                    (value) => settings.setWheelSwitchImage(value),
+                    settings.wheelSwitchVideo,
+                    (value) => settings.setWheelSwitchVideo(value),
                     // 说明修饰键滚轮执行的是与当前设置相反的行为
-                    subtitle: settings.wheelSwitchImage
+                    subtitle: settings.wheelSwitchVideo
                         ? AppLocalizations.of(context).ctrlWheelZoomHint
                         : AppLocalizations.of(context).ctrlWheelSwitchHint,
                   ),
@@ -575,129 +565,6 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildIntervalSetting(
-    BuildContext context,
-    String title,
-    int presetInterval,
-    int customInterval,
-    bool useCustomInterval,
-    void Function(int) onChanged,
-    void Function(int) onCustomChanged,
-    void Function(bool) onUseCustomChanged,
-  ) {
-    final l10n = AppLocalizations.of(context);
-    // 间隔选项（毫秒）
-    const intervals = [
-      1000,
-      2000,
-      3000,
-      4000,
-      5000,
-      6000,
-      7000,
-      8000,
-      9000,
-      10000,
-      15000,
-      20000,
-      30000,
-      45000,
-      60000,
-      120000,
-      180000,
-      300000,
-      600000,
-    ];
-    // 对应的显示文字
-    String intervalLabel(int ms) {
-      if (ms < 60000) return '${ms ~/ 1000}${l10n.second}';
-      if (ms < 3600000) return '${ms ~/ 60000}${l10n.minute}';
-      return '${ms ~/ 60000}${l10n.minute}';
-    }
-
-    // 档位值未命中预设刻度时，滑块落在最接近的档位上（超出最大档则落在末档）
-    var sliderIndex = intervals.indexWhere((ms) => ms >= presetInterval);
-    if (sliderIndex < 0) sliderIndex = intervals.length - 1;
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  title,
-                  style: Theme.of(context).textTheme.bodyLarge,
-                ),
-              ),
-              Text(
-                intervalLabel(intervals[sliderIndex]),
-                style: const TextStyle(color: Colors.grey),
-              ),
-            ],
-          ),
-          Slider(
-            value: sliderIndex.toDouble(),
-            min: 0,
-            max: (intervals.length - 1).toDouble(),
-            divisions: intervals.length - 1,
-            label: intervalLabel(intervals[sliderIndex]),
-            // 自定义开启时档位不生效，滑块仅保留原有位置
-            onChanged: useCustomInterval
-                ? null
-                : (value) => onChanged(intervals[value.round()]),
-            activeColor: const Color(0xFFe94560),
-          ),
-          // 自定义间隔输入（独立一行）
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              // 左侧整组占满剩余宽度：标签后紧跟输入框与单位，多余空白落在开关之前
-              Expanded(
-                child: Row(
-                  children: [
-                    // 空间不足时优先收缩标签，避免整行溢出
-                    Flexible(
-                      child: Text(
-                        l10n.customIntervalLabel,
-                        style: Theme.of(context).textTheme.bodyLarge,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    SizedBox(
-                      width: 80,
-                      height: 38,
-                      child: _CustomInlineInput(
-                        initialValue: customInterval ~/ 1000,
-                        enabled: useCustomInterval,
-                        onSubmit: (seconds) => onCustomChanged(seconds * 1000),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      l10n.second,
-                      style: Theme.of(context).textTheme.bodyLarge,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 12),
-              Switch(
-                value: useCustomInterval,
-                onChanged: onUseCustomChanged,
-                activeThumbColor: const Color(0xFFe94560),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildDropdownSetting<T>(
     BuildContext context,
     String title,
@@ -790,7 +657,7 @@ class SettingsScreen extends StatelessWidget {
       ('L', l10n.rotateLeft),
       ('ESC', l10n.exitPlayback),
       ('F11', l10n.toggleFullscreen),
-      ('Del', l10n.deleteImage),
+      ('Del', l10n.deleteVideo),
     ];
 
     // 快捷键条目较多，均分到左右两列显示，避免面板过高
@@ -902,83 +769,4 @@ class _SettingsGroup {
 
   /// 分组高度的粗略估算，仅用于宽屏分栏时均衡各列高度。
   final int weight;
-}
-
-/// 换片时间设置里的自定义秒数输入组件
-class _CustomInlineInput extends StatefulWidget {
-  final int initialValue;
-  final bool enabled;
-  final void Function(int) onSubmit;
-
-  const _CustomInlineInput({
-    required this.initialValue,
-    this.enabled = true,
-    required this.onSubmit,
-  });
-
-  @override
-  State<_CustomInlineInput> createState() => _CustomInlineInputState();
-}
-
-class _CustomInlineInputState extends State<_CustomInlineInput> {
-  late TextEditingController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = TextEditingController(text: '${widget.initialValue}');
-  }
-
-  @override
-  void didUpdateWidget(covariant _CustomInlineInput oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.initialValue != widget.initialValue) {
-      _controller.text = '${widget.initialValue}';
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  void _submit() {
-    final seconds = int.tryParse(_controller.text);
-    if (seconds != null && seconds > 1 && seconds < 65535) {
-      widget.onSubmit(seconds);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return TextField(
-      controller: _controller,
-      enabled: widget.enabled,
-      keyboardType: TextInputType.number,
-      style: TextStyle(
-        fontSize: Theme.of(context).textTheme.bodyLarge?.fontSize,
-        color: Colors.white,
-      ),
-      decoration: InputDecoration(
-        isDense: true,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        filled: true,
-        fillColor: Colors.black26,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(6),
-          borderSide: const BorderSide(color: Colors.white24),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(6),
-          borderSide: const BorderSide(color: Colors.white24),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(6),
-          borderSide: const BorderSide(color: Color(0xFFe94560)),
-        ),
-      ),
-      onSubmitted: (_) => _submit(),
-    );
-  }
 }

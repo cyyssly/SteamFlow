@@ -8,6 +8,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.ContentUris
 import android.database.Cursor
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -17,12 +19,18 @@ import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.util.Locale
+import kotlin.math.roundToInt
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.cyyssly.steamflow/media_store"
+
+    /// 缩略图最长边（与 Dart 侧 video_thumbnail_win.dart 的 _maxSize 保持一致）
+    private val THUMBNAIL_MAX_SIZE = 512
+
     private var pendingResult: MethodChannel.Result? = null
     private var pendingTrashResult: MethodChannel.Result? = null
 
@@ -34,15 +42,15 @@ class MainActivity : FlutterActivity() {
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
-                "getImageAlbums" -> handleGetImageAlbums(result)
+                "getVideoAlbums" -> handleGetVideoAlbums(result)
                 "requestStoragePermission" -> handleRequestPermission(result)
-                "getFolderImages" -> {
+                "getFolderVideos" -> {
                     val folderPath = call.argument<String>("folderPath") ?: ""
-                    handleGetFolderImages(folderPath, result)
+                    handleGetFolderVideos(folderPath, result)
                 }
-                "readImageBytes" -> {
+                "getVideoThumbnail" -> {
                     val path = call.argument<String>("path") ?: ""
-                    handleReadImageBytes(path, result)
+                    handleGetVideoThumbnail(path, result)
                 }
                 "deleteToTrash" -> {
                     val paths = call.argument<List<String>>("paths") ?: emptyList()
@@ -71,7 +79,7 @@ class MainActivity : FlutterActivity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 100) {
-            // Android 14+ 用户可能只选择“部分照片”，此时只有
+            // Android 14+ 用户可能只选择“部分视频”，此时只有
             // READ_MEDIA_VISUAL_USER_SELECTED 被授予。
             // 这种情况仍允许继续使用，但要记录日志，
             // 因为后续查询结果会是不完整的（相册数量/缩略图会时多时少）。
@@ -80,7 +88,7 @@ class MainActivity : FlutterActivity() {
             if (granted && !hasFullStoragePermission()) {
                 android.util.Log.w(
                     "SteamFlow",
-                    "requestStoragePermission: 仅获取到部分照片访问权限，结果可能不完整"
+                    "requestStoragePermission: 仅获取到部分视频访问权限，结果可能不完整"
                 )
             }
             pendingResult?.success(granted)
@@ -120,7 +128,7 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    /// 把图片移入系统回收站（Android 11+ 使用 MediaStore.createTrashRequest）
+    /// 把视频移入系统回收站（Android 11+ 使用 MediaStore.createTrashRequest）
     private fun handleDeleteToTrash(paths: List<String>, result: MethodChannel.Result) {
         if (paths.isEmpty()) {
             result.success(true)
@@ -165,17 +173,17 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    /// 通过路径查询 MediaStore 中的图片 URI
+    /// 通过路径查询 MediaStore 中的视频 URI
     private fun queryUrisByPaths(paths: List<String>): List<Uri> {
         val uris = mutableListOf<Uri>()
         val contentResolver: ContentResolver = contentResolver
-        val projection = arrayOf(MediaStore.Images.Media._ID)
+        val projection = arrayOf(MediaStore.Video.Media._ID)
 
         for (path in paths) {
-            val selection = "${MediaStore.Images.Media.DATA} = ?"
+            val selection = "${MediaStore.Video.Media.DATA} = ?"
             val selectionArgs = arrayOf(path)
             val cursor = contentResolver.query(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
                 projection,
                 selection,
                 selectionArgs,
@@ -183,10 +191,10 @@ class MainActivity : FlutterActivity() {
             )
             cursor?.use {
                 if (it.moveToFirst()) {
-                    val id = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media._ID))
+                    val id = it.getLong(it.getColumnIndexOrThrow(MediaStore.Video.Media._ID))
                     uris.add(
                         ContentUris.withAppendedId(
-                            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
                             id
                         )
                     )
@@ -252,7 +260,7 @@ class MainActivity : FlutterActivity() {
                         treeDocId
                     )
 
-                    // 创建新文档（图片类型）
+                    // 创建新文档（视频类型）
                     val newDocUri = resolver.insert(
                         destDirUri,
                         ContentValues().apply {
@@ -328,38 +336,36 @@ class MainActivity : FlutterActivity() {
     private fun getMimeType(fileName: String): String {
         val ext = fileName.substringAfterLast('.', "").lowercase(Locale.ROOT)
         return when (ext) {
-            "jpg", "jpeg" -> "image/jpeg"
-            "png" -> "image/png"
-            "webp" -> "image/webp"
-            "gif" -> "image/gif"
-            "bmp" -> "image/bmp"
-            "tiff", "tif" -> "image/tiff"
-            else -> "image/*"
+            "mp4", "m4v" -> "video/mp4"
+            "mov" -> "video/quicktime"
+            "mkv" -> "video/x-matroska"
+            "webm" -> "video/webm"
+            else -> "video/*"
         }
     }
 
-    private fun handleGetImageAlbums(result: MethodChannel.Result) {
+    private fun handleGetVideoAlbums(result: MethodChannel.Result) {
         if (!hasStoragePermission()) {
-            android.util.Log.e("SteamFlow", "getImageAlbums: permission denied")
-            result.error("PERMISSION_DENIED", "没有读取图片的权限", null)
+            android.util.Log.e("SteamFlow", "getVideoAlbums: permission denied")
+            result.error("PERMISSION_DENIED", "没有读取视频的权限", null)
             return
         }
         if (hasPartialStoragePermission()) {
             // 部分权限下查询结果只是用户勾选的子集，记录日志便于区分原因
             android.util.Log.w(
                 "SteamFlow",
-                "getImageAlbums: 仅有部分照片访问权限，结果可能不完整"
+                "getVideoAlbums: 仅有部分视频访问权限，结果可能不完整"
             )
         }
         try {
-            val albums = queryImageAlbums()
-            android.util.Log.d("SteamFlow", "getImageAlbums: returning ${albums.size} albums")
+            val albums = queryVideoAlbums()
+            android.util.Log.d("SteamFlow", "getVideoAlbums: returning ${albums.size} albums")
             for (album in albums) {
-                android.util.Log.d("SteamFlow", "  album: ${album["name"]} path=${album["path"]} count=${album["imageCount"]}")
+                android.util.Log.d("SteamFlow", "  album: ${album["name"]} path=${album["path"]} count=${album["videoCount"]}")
             }
             result.success(albums)
         } catch (e: Exception) {
-            android.util.Log.e("SteamFlow", "getImageAlbums: query failed: ${e.message}", e)
+            android.util.Log.e("SteamFlow", "getVideoAlbums: query failed: ${e.message}", e)
             result.error("QUERY_FAILED", "查询相册失败: ${e.message}", null)
         }
     }
@@ -370,61 +376,114 @@ class MainActivity : FlutterActivity() {
             return
         }
         pendingResult = result
-        // Android 14+ 同时请求 READ_MEDIA_IMAGES 和 READ_MEDIA_VISUAL_USER_SELECTED
+        // Android 14+ 同时请求 READ_MEDIA_VIDEO 和 READ_MEDIA_VISUAL_USER_SELECTED
         val permissions = getRequiredPermissions()
         ActivityCompat.requestPermissions(this, permissions, 100)
     }
 
-    private fun handleReadImageBytes(path: String, result: MethodChannel.Result) {
+    /// 取视频首帧缩略图（等比缩放到最长边不超过 [THUMBNAIL_MAX_SIZE]，
+    /// 不裁剪、不留黑边，因此返回的宽高比就是视频本身的宽高比）。
+    ///
+    /// MediaMetadataRetriever 的解码是同步阻塞的，必须放到后台线程，
+    /// 否则会卡住平台主线程，进而卡住整个 Flutter UI。
+    private fun handleGetVideoThumbnail(path: String, result: MethodChannel.Result) {
+        if (path.isBlank()) {
+            result.success(null)
+            return
+        }
+        Thread {
+            val payload = try {
+                generateVideoThumbnail(path)
+            } catch (e: Exception) {
+                android.util.Log.e("SteamFlow", "getVideoThumbnail failed: $path: ${e.message}", e)
+                null
+            }
+            // MethodChannel.Result 必须在平台主线程上回调
+            runOnUiThread { result.success(payload) }
+        }.start()
+    }
+
+    /// 解码首帧并编码为 PNG；失败返回 null。
+    private fun generateVideoThumbnail(path: String): Map<String, Any?>? {
+        val retriever = MediaMetadataRetriever()
         try {
-            val bytes = if (path.startsWith("content://")) {
-                // 处理 content:// URI（通过 ContentResolver 读取）
-                val uri = Uri.parse(path)
-                contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            setDataSourceFor(retriever, path)
+            val frame = retriever.getFrameAtTime(
+                0,
+                MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+            ) ?: return null
+
+            val (width, height) = scaledThumbnailSize(frame.width, frame.height)
+            val scaled = if (width == frame.width && height == frame.height) {
+                frame
             } else {
-                // 处理普通文件路径
-                val file = File(path)
-                if (!file.exists()) {
-                    result.error("FILE_NOT_FOUND", "文件不存在: $path", null)
-                    return
-                }
-                file.readBytes()
+                Bitmap.createScaledBitmap(frame, width, height, true)
             }
 
-            if (bytes != null) {
-                result.success(bytes)
-            } else {
-                result.error("READ_FAILED", "无法读取文件: $path", null)
-            }
-        } catch (e: Exception) {
-            result.error("READ_FAILED", "读取文件失败: ${e.message}", null)
+            val stream = ByteArrayOutputStream()
+            scaled.compress(Bitmap.CompressFormat.PNG, 100, stream)
+            if (scaled !== frame) scaled.recycle()
+            frame.recycle()
+
+            return mapOf(
+                "bytes" to stream.toByteArray(),
+                "width" to width,
+                "height" to height
+            )
+        } finally {
+            runCatching { retriever.release() }
         }
     }
 
-    /// 通过 MediaStore 查询指定文件夹下的所有图片路径
-    private fun handleGetFolderImages(folderPath: String, result: MethodChannel.Result) {
-        if (!hasStoragePermission()) {
-            result.error("PERMISSION_DENIED", "没有读取图片的权限", null)
+    /// [retriever] 的数据源可能是文件路径，也可能是相册返回的 content:// URI。
+    private fun setDataSourceFor(retriever: MediaMetadataRetriever, path: String) {
+        if (path.startsWith("content://")) {
+            retriever.setDataSource(this, Uri.parse(path))
             return
         }
         try {
-            val images = queryFolderImages(folderPath)
-            result.success(images)
+            retriever.setDataSource(path)
         } catch (e: Exception) {
-            android.util.Log.e("SteamFlow", "getFolderImages failed: ${e.message}", e)
-            result.error("QUERY_FAILED", "查询文件夹图片失败: ${e.message}", null)
+            // Android 10+ 上其他应用写入的媒体文件可能无法按路径读取，
+            // 回退到用 MediaStore 解析成 content:// URI 再读
+            val uri = queryUrisByPaths(listOf(path)).firstOrNull()
+            if (uri == null) throw e
+            retriever.setDataSource(this, uri)
         }
     }
 
-    /// 通过 MediaStore ContentResolver 按文件夹路径查询图片
+    /// 等比缩放到最长边不超过 [THUMBNAIL_MAX_SIZE]，保持原始宽高比。
+    private fun scaledThumbnailSize(width: Int, height: Int): Pair<Int, Int> {
+        val longest = maxOf(width, height)
+        if (longest <= THUMBNAIL_MAX_SIZE) return width to height
+        val scale = THUMBNAIL_MAX_SIZE.toDouble() / longest
+        return maxOf(1, (width * scale).roundToInt()) to
+            maxOf(1, (height * scale).roundToInt())
+    }
+
+    /// 通过 MediaStore 查询指定文件夹下的所有视频路径
+    private fun handleGetFolderVideos(folderPath: String, result: MethodChannel.Result) {
+        if (!hasStoragePermission()) {
+            result.error("PERMISSION_DENIED", "没有读取视频的权限", null)
+            return
+        }
+        try {
+            val videos = queryFolderVideos(folderPath)
+            result.success(videos)
+        } catch (e: Exception) {
+            android.util.Log.e("SteamFlow", "getFolderVideos failed: ${e.message}", e)
+            result.error("QUERY_FAILED", "查询文件夹视频失败: ${e.message}", null)
+        }
+    }
+
+    /// 通过 MediaStore ContentResolver 按文件夹路径查询视频
     ///
     /// 同时把 MediaStore 已索引好的 WIDTH / HEIGHT 一并返回。
-    /// 瀑布流需要每张图的宽高比来决定卡片高度，原先的做法是在 Dart 端
-    /// 把整张原图读进内存再解析——手机上每张几 MB、一批 30 张，会明显拖慢加载。
-    /// MediaStore 的 WIDTH/HEIGHT 与 image 包解析出的原始尺寸语义一致
-    /// （都不含 EXIF 旋转），因此可以直接使用。
-    private fun queryFolderImages(folderPath: String): List<Map<String, Any?>> {
-        val images = mutableListOf<Map<String, Any?>>()
+    /// 瀑布流需要每个视频的宽高比来决定卡片高度，而视频的尺寸无法
+    /// 从文件头解析出来，只能解码一帧；MediaStore 既然已索引好就直接用，
+    /// 省掉一次首帧解码（手机上这一步非常慢）。
+    private fun queryFolderVideos(folderPath: String): List<Map<String, Any?>> {
+        val videos = mutableListOf<Map<String, Any?>>()
         val contentResolver: ContentResolver = contentResolver
 
         // 把文件夹路径转为 relative_path 格式
@@ -441,17 +500,17 @@ class MainActivity : FlutterActivity() {
         }
 
         val projection = arrayOf(
-            MediaStore.Images.Media._ID,
-            MediaStore.Images.Media.DATA,
-            MediaStore.Images.Media.WIDTH,
-            MediaStore.Images.Media.HEIGHT
+            MediaStore.Video.Media._ID,
+            MediaStore.Video.Media.DATA,
+            MediaStore.Video.Media.WIDTH,
+            MediaStore.Video.Media.HEIGHT
         )
 
         // 查询条件：相对路径匹配，或 DATA 列以文件夹路径开头
         val selection = if (relativePath != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            "${MediaStore.Images.Media.RELATIVE_PATH} = ?"
+            "${MediaStore.Video.Media.RELATIVE_PATH} = ?"
         } else {
-            "${MediaStore.Images.Media.DATA} LIKE ?"
+            "${MediaStore.Video.Media.DATA} LIKE ?"
         }
         val selectionArgs = if (relativePath != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             arrayOf(relativePath)
@@ -459,7 +518,7 @@ class MainActivity : FlutterActivity() {
             arrayOf("$folderPath/%")
         }
 
-        val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        val collection = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
         val cursor = contentResolver.query(
             collection,
             projection,
@@ -469,21 +528,21 @@ class MainActivity : FlutterActivity() {
         )
 
         cursor?.use {
-            val idIdx = it.getColumnIndex(MediaStore.Images.Media._ID)
-            val dataIdx = it.getColumnIndex(MediaStore.Images.Media.DATA)
-            val widthIdx = it.getColumnIndex(MediaStore.Images.Media.WIDTH)
-            val heightIdx = it.getColumnIndex(MediaStore.Images.Media.HEIGHT)
+            val idIdx = it.getColumnIndex(MediaStore.Video.Media._ID)
+            val dataIdx = it.getColumnIndex(MediaStore.Video.Media.DATA)
+            val widthIdx = it.getColumnIndex(MediaStore.Video.Media.WIDTH)
+            val heightIdx = it.getColumnIndex(MediaStore.Video.Media.HEIGHT)
             if (idIdx < 0) return@use
 
             while (it.moveToNext()) {
-                var imagePath: String? = null
+                var videoPath: String? = null
                 if (dataIdx >= 0) {
-                    imagePath = it.getString(dataIdx)
+                    videoPath = it.getString(dataIdx)
                 }
-                if (imagePath == null || imagePath.isBlank()) continue
+                if (videoPath == null || videoPath.isBlank()) continue
 
                 // WIDTH/HEIGHT 可能为 0（MediaStore 尚未扫描到该文件），
-                // 此时返回 null，由 Dart 端回退到读取文件头解析
+                // 此时返回 null，由 Dart 端回退到解码首帧推导
                 var aspectRatio: Double? = null
                 if (widthIdx >= 0 && heightIdx >= 0) {
                     val w = it.getInt(widthIdx)
@@ -491,35 +550,35 @@ class MainActivity : FlutterActivity() {
                     if (w > 0 && h > 0) aspectRatio = w.toDouble() / h.toDouble()
                 }
 
-                images.add(
+                videos.add(
                     mapOf(
-                        "name" to imagePath.substringAfterLast('/'),
-                        "path" to imagePath,
+                        "name" to videoPath.substringAfterLast('/'),
+                        "path" to videoPath,
                         "aspectRatio" to aspectRatio
                     )
                 )
             }
         }
 
-        return images
+        return videos
     }
 
-    /// 是否拥有“完整”的图片读取权限
+    /// 是否拥有“完整”的视频读取权限
     private fun hasFullStoragePermission(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            isGranted(Manifest.permission.READ_MEDIA_IMAGES)
+            isGranted(Manifest.permission.READ_MEDIA_VIDEO)
         } else {
             isGranted(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
     }
 
-    /// 是否只拿到“部分照片”访问权限（Android 14+ 用户选择“仅允许访问部分照片”）
+    /// 是否只拿到“部分视频”访问权限（Android 14+ 用户选择“仅允许访问部分视频”）
     ///
-    /// 这种状态下 MediaStore 只会返回用户勾选过的那部分图片，
-    /// 相册数量、图片数量和缩略图都不完整，且会随用户选择而变化。
+    /// 这种状态下 MediaStore 只会返回用户勾选过的那部分视频，
+    /// 相册数量、视频数量和缩略图都不完整，且会随用户选择而变化。
     private fun hasPartialStoragePermission(): Boolean {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
-            !isGranted(Manifest.permission.READ_MEDIA_IMAGES) &&
+            !isGranted(Manifest.permission.READ_MEDIA_VIDEO) &&
             isGranted(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
     }
 
@@ -541,35 +600,35 @@ class MainActivity : FlutterActivity() {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             // Android 14+：同时请求完整访问和部分访问权限
             arrayOf(
-                Manifest.permission.READ_MEDIA_IMAGES,
+                Manifest.permission.READ_MEDIA_VIDEO,
                 Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
             )
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
+            arrayOf(Manifest.permission.READ_MEDIA_VIDEO)
         } else {
             arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
     }
 
-    private fun queryImageAlbums(): List<Map<String, Any>> {
+    private fun queryVideoAlbums(): List<Map<String, Any>> {
         val albums = mutableListOf<Map<String, Any>>()
         val contentResolver: ContentResolver = contentResolver
 
         // Android 10+ 使用 RELATIVE_PATH 替代已废弃的 DATA 列
         val projection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             arrayOf(
-                MediaStore.Images.Media._ID,
-                MediaStore.Images.Media.BUCKET_ID,
-                MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
-                MediaStore.Images.Media.DATA,
-                MediaStore.Images.Media.RELATIVE_PATH
+                MediaStore.Video.Media._ID,
+                MediaStore.Video.Media.BUCKET_ID,
+                MediaStore.Video.Media.BUCKET_DISPLAY_NAME,
+                MediaStore.Video.Media.DATA,
+                MediaStore.Video.Media.RELATIVE_PATH
             )
         } else {
             arrayOf(
-                MediaStore.Images.Media._ID,
-                MediaStore.Images.Media.BUCKET_ID,
-                MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
-                MediaStore.Images.Media.DATA
+                MediaStore.Video.Media._ID,
+                MediaStore.Video.Media.BUCKET_ID,
+                MediaStore.Video.Media.BUCKET_DISPLAY_NAME,
+                MediaStore.Video.Media.DATA
             )
         }
 
@@ -578,41 +637,41 @@ class MainActivity : FlutterActivity() {
             // 用 Map 按卷名去重，避免 external 和 external_primary 指向同一卷时重复查询
             val volMap = linkedMapOf<String, Uri>()
             // EXTERNAL_CONTENT_URI 默认指向 external_primary
-            volMap["external_primary"] = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            volMap["external_primary"] = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
             // 尝试获取所有卷名并查询每个卷
             try {
                 val volNames = MediaStore.getExternalVolumeNames(this)
                 for (name in volNames) {
                     if (!volMap.containsKey(name)) {
-                        volMap[name] = MediaStore.Images.Media.getContentUri(name)
+                        volMap[name] = MediaStore.Video.Media.getContentUri(name)
                     }
                 }
             } catch (e: Exception) {
                 android.util.Log.w("SteamFlow", "getExternalVolumeNames failed: ${e.message}")
             }
-            android.util.Log.d("SteamFlow", "queryImageAlbums: querying ${volMap.size} volume(s): ${volMap.keys}")
+            android.util.Log.d("SteamFlow", "queryVideoAlbums: querying ${volMap.size} volume(s): ${volMap.keys}")
             volMap.values.toList()
         } else {
-            listOf(MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
+            listOf(MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
         }
 
         for (collection in volumes) {
-            android.util.Log.d("SteamFlow", "queryImageAlbums: querying $collection")
+            android.util.Log.d("SteamFlow", "queryVideoAlbums: querying $collection")
             val cursor = contentResolver.query(
                 collection,
                 projection,
                 null,
                 null,
-                "${MediaStore.Images.Media.BUCKET_DISPLAY_NAME} ASC"
+                "${MediaStore.Video.Media.BUCKET_DISPLAY_NAME} ASC"
             )
 
             cursor?.use {
-                val idIdx = it.getColumnIndex(MediaStore.Images.Media._ID)
-                val bucketIdIdx = it.getColumnIndex(MediaStore.Images.Media.BUCKET_ID)
-                val bucketNameIdx = it.getColumnIndex(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
-                val dataIdx = it.getColumnIndex(MediaStore.Images.Media.DATA)
+                val idIdx = it.getColumnIndex(MediaStore.Video.Media._ID)
+                val bucketIdIdx = it.getColumnIndex(MediaStore.Video.Media.BUCKET_ID)
+                val bucketNameIdx = it.getColumnIndex(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
+                val dataIdx = it.getColumnIndex(MediaStore.Video.Media.DATA)
                 val relativePathIdx = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    it.getColumnIndex(MediaStore.Images.Media.RELATIVE_PATH)
+                    it.getColumnIndex(MediaStore.Video.Media.RELATIVE_PATH)
                 } else {
                     -1
                 }
@@ -623,15 +682,15 @@ class MainActivity : FlutterActivity() {
                 }
 
                 // 必须把当前查询所用的 collection 传下去：缩略图 URI 要用
-                // “这条记录所属的卷”来拼，否则外置 SD 卡上的图片 ID 会被拼到
-                // 主存储（external_primary）上，解析成完全不相干的另一张图片
+                // “这条记录所属的卷”来拼，否则外置 SD 卡上的视频 ID 会被拼到
+                // 主存储（external_primary）上，解析成完全不相干的另一个视频
                 querySingleVolume(it, collection, idIdx, bucketIdIdx, bucketNameIdx, dataIdx, relativePathIdx, albums)
             }
         }
 
-        android.util.Log.d("SteamFlow", "queryImageAlbums: found ${albums.size} albums total")
-        albums.sortByDescending { it["imageCount"] as Int }
-        return albums.filter { (it["imageCount"] as Int) > 0 }
+        android.util.Log.d("SteamFlow", "queryVideoAlbums: found ${albums.size} albums total")
+        albums.sortByDescending { it["videoCount"] as Int }
+        return albums.filter { (it["videoCount"] as Int) > 0 }
     }
 
     private fun querySingleVolume(
@@ -682,44 +741,44 @@ class MainActivity : FlutterActivity() {
                     name = bucketName,
                     representativePath = albumPath,
                     count = 0,
-                    firstImageId = 0
+                    firstVideoId = 0
                 )
             }
             album.count++
 
-            // 记录第一张图片的 ID（用于缩略图）
-            if (album.firstImageId == 0L && idIdx >= 0) {
-                album.firstImageId = cursor.getLong(idIdx)
+            // 记录该相册第一个视频的 ID（用于取缩略图）
+            if (album.firstVideoId == 0L && idIdx >= 0) {
+                album.firstVideoId = cursor.getLong(idIdx)
             }
         }
 
         for ((_, albumData) in albumMap) {
-            val thumbnailUri = if (albumData.firstImageId > 0) {
-                // 用实际来源卷拼接 URI，保证缩略图指向同一卷上的那张图片
-                ContentUris.withAppendedId(collection, albumData.firstImageId).toString()
+            val thumbnailUri = if (albumData.firstVideoId > 0) {
+                // 用实际来源卷拼接 URI，保证缩略图指向同一卷上的那个视频
+                ContentUris.withAppendedId(collection, albumData.firstVideoId).toString()
             } else null
 
             albums.add(
                 mapOf(
                     "name" to albumData.name,
                     "path" to albumData.representativePath,
-                    "imageCount" to albumData.count,
+                    "videoCount" to albumData.count,
                     "thumbnailPath" to (thumbnailUri ?: albumData.representativePath)
                 )
             )
         }
     }
 
-    private fun getAlbumDirectoryPath(imagePath: String?): String? {
-        if (imagePath == null || imagePath.isBlank()) return null
-        val lastSlash = imagePath.lastIndexOf('/')
-        return if (lastSlash > 0) imagePath.substring(0, lastSlash) else null
+    private fun getAlbumDirectoryPath(videoPath: String?): String? {
+        if (videoPath == null || videoPath.isBlank()) return null
+        val lastSlash = videoPath.lastIndexOf('/')
+        return if (lastSlash > 0) videoPath.substring(0, lastSlash) else null
     }
 
     data class AlbumData(
         val name: String,
         val representativePath: String,
         var count: Int,
-        var firstImageId: Long
+        var firstVideoId: Long
     )
 }

@@ -5,7 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:steam_flow/l10n/app_localizations.dart';
 
 /// 展示用版本号（与 pubspec.yaml 的 version 保持一致，改版本时需同步）
-const String appVersionLabel = 'V0.1.0';
+const String appVersionLabel = 'V1.0.0';
 
 /// 帮助页：说明文档 / 关于 / 赞助
 ///
@@ -120,8 +120,8 @@ class _HelpScreenState extends State<HelpScreen> {
     _groupTitle(loc.helpGroupPlay),
     _bullet(loc.helpPlayOrder),
     _bullet(loc.helpLoopAuto),
-    _bullet(loc.helpInterval),
-    _bullet(loc.helpPauseZoom),
+    _bullet(loc.helpPlayPause),
+    _bullet(loc.helpGestures),
     _groupTitle(loc.helpGroupDisplay),
     _bullet(loc.helpFitMode),
     _bullet(loc.helpBackground),
