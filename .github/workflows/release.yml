@@ -1,6 +1,6 @@
 name: Release
 
-# 推送 v* 标签（如 v1.0.0）时自动构建 Windows 发布包并创建 GitHub Release。
+# 推送 v* 标签（如 v1.0.0）时自动构建 Windows 与 Android 发布包并创建 GitHub Release。
 on:
   push:
     tags:
@@ -36,11 +36,73 @@ jobs:
         run: |
           Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath "SteamFlow-${{ github.ref_name }}-windows-x64.zip"
 
-      - name: Create release
+      - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
           files: SteamFlow-*.zip
           generate_release_notes: true
+          draft: false
+          prerelease: false
+
+  android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # AGP 9 / Gradle 9 需要 JDK 17 及以上
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.8
+          cache: true
+
+      - name: Accept Android licenses
+        run: yes | flutter doctor --android-licenses || true
+
+      # 签名密钥通过 Secrets 注入，不写入仓库；
+      # 未配置 Secrets 时 build.gradle.kts 会自动回退到 debug 签名。
+      - name: Configure signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "未提供签名密钥，将使用 debug 签名打包"
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks
+          cat > android/key.properties <<EOF
+          storeFile=upload-keystore.jks
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          storePassword=$STORE_PASSWORD
+          EOF
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Rename APK
+        run: mv build/app/outputs/flutter-apk/app-release.apk "SteamFlow-${GITHUB_REF_NAME}-android.apk"
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          files: SteamFlow-*-android.apk
           draft: false
           prerelease: false
