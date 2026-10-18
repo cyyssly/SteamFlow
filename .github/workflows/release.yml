@@ -66,8 +66,20 @@ jobs:
           flutter-version: 3.44.8
           cache: true
 
-      - name: Accept Android licenses
-        run: yes | flutter doctor --android-licenses || true
+      # 显式安装与 Flutter 默认值一致的 SDK 组件并接受许可。
+      # runner 预装的 Android SDK 通常缺少 platform 36 / build-tools 36.0.0 / NDK 28.2.13676358，
+      # 而 Flutter/AGP 的自动补装依赖“许可已接受”；许可未接受时会在 Build APK 阶段直接失败。
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;28.2.13676358"
 
       # 签名密钥通过 Secrets 注入，不写入仓库；
       # 未配置 Secrets 时 build.gradle.kts 会自动回退到 debug 签名。
