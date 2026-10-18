@@ -87,6 +87,17 @@ jobs:
           storePassword=$STORE_PASSWORD
           EOF
 
+      # 把 CI 实际解析到的关键版本以 ::notice:: 注释上报（注释可匿名读取），
+      # 便于在无法登录查看日志时核对环境差异。
+      - name: Report Android environment
+        run: |
+          set +e
+          FL=$(flutter --version | head -n 1)
+          FP=$(ls -d ~/.pub-cache/hosted/*/file_picker-* 2>/dev/null | head -n 1)
+          CS=$(grep -m1 "compileSdk" "$FP/android/build.gradle" 2>/dev/null | tr -d ' ')
+          LF=$(ls -d ~/.pub-cache/hosted/*/flutter_plugin_android_lifecycle-* 2>/dev/null | head -n 1)
+          echo "::notice title=ci-env::flutter=$FL | file_picker=$FP ($CS) | lifecycle=$LF"
+
       # 环境探测、依赖安装与构建合并在同一步，失败时把 Gradle 的“What went wrong”
       # 片段以 ::error:: 注释抛出：Actions 日志需登录才能查看，而 check-run 注释可匿名读取。
       - name: Build Android release
