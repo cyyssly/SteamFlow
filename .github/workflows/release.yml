@@ -66,20 +66,6 @@ jobs:
           flutter-version: 3.44.8
           cache: true
 
-      # runner 预装的 Android SDK 通常缺少 platform 36 / build-tools 36.0.0 / NDK 28.2.13676358
-      # （对应 Flutter 3.44.8 的 compileSdkVersion 与 ndkVersion），
-      # 而 Flutter/AGP 的自动补装依赖“许可已接受”，故直接调用 runner 自带的 sdkmanager 安装。
-      - name: Install Android SDK packages
-        run: |
-          set -ex
-          command -v sdkmanager
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager --install \
-            "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;36.0.0" \
-            "ndk;28.2.13676358"
-
       # 签名密钥通过 Secrets 注入，不写入仓库；
       # 未配置 Secrets 时 build.gradle.kts 会自动回退到 debug 签名。
       - name: Configure signing
@@ -101,17 +87,21 @@ jobs:
           storePassword=$STORE_PASSWORD
           EOF
 
-      - name: Install dependencies
-        run: flutter pub get
-
-      # 失败时把错误尾部以 ::error:: 注释抛出：Actions 日志需要登录才能查看，
-      # 而 check-run 注释可以匿名读取，便于快速定位问题。
-      - name: Build APK
+      # 环境探测、依赖安装与构建合并在同一步，失败时把 Gradle 的“What went wrong”
+      # 片段以 ::error:: 注释抛出：Actions 日志需登录才能查看，而 check-run 注释可匿名读取。
+      - name: Build Android release
         run: |
           set -o pipefail
-          flutter build apk --release 2>&1 | tee build-apk.log || {
-            ERR=$(tail -n 30 build-apk.log | tr '\n' '~')
-            echo "::error title=Build APK failed::$ERR"
+          {
+            set -ex
+            flutter doctor -v || true
+            yes | flutter doctor --android-licenses > /dev/null 2>&1 || true
+            flutter pub get
+            flutter build apk --release
+          } 2>&1 | tee android-build.log || {
+            ERR=$(sed -n '/What went wrong/,$p' android-build.log | head -n 25 | tr '\n' '~')
+            [ -n "$ERR" ] || ERR=$(tail -n 40 android-build.log | tr '\n' '~')
+            echo "::error title=Android build failed::$ERR"
             exit 1
           }
 
