@@ -7,6 +7,7 @@ import 'package:steam_flow/providers/settings_provider.dart';
 import 'package:steam_flow/screens/folder_selection_screen.dart';
 import 'package:steam_flow/screens/help_screen.dart';
 import 'package:steam_flow/services/media_store_service.dart';
+import 'package:steam_flow/services/video_formats.dart';
 import 'package:steam_flow/l10n/app_localizations.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -167,18 +168,11 @@ class _HomeScreenState extends State<HomeScreen> {
     String folderPath,
     SettingsProvider settings,
   ) async {
-    const supportedExtensions = {'mp4', 'm4v', 'mov', 'mkv', 'webm'};
-
     // Android 端通过 MediaStore 查询（绕过 Scoped Storage 限制）
     if (Platform.isAndroid) {
       // 直接透传 VideoItem，保留 MediaStore 已索引好的宽高比
       final videos = await MediaStoreService.getFolderVideos(folderPath);
-      return videos.where((item) {
-        final dotIndex = item.path.lastIndexOf('.');
-        if (dotIndex == -1) return false;
-        final ext = item.path.toLowerCase().substring(dotIndex + 1);
-        return supportedExtensions.contains(ext);
-      }).toList();
+      return videos.where((item) => isSupportedVideoPath(item.path)).toList();
     }
 
     // 桌面端使用文件系统 API
@@ -198,12 +192,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     return files
-        .where((file) {
-          final dotIndex = file.path.lastIndexOf('.');
-          if (dotIndex == -1) return false;
-          final ext = file.path.toLowerCase().substring(dotIndex + 1);
-          return supportedExtensions.contains(ext);
-        })
+        .where((file) => isSupportedVideoPath(file.path))
         .map(
           (file) => VideoItem(
             name: file.path.split(Platform.pathSeparator).last,

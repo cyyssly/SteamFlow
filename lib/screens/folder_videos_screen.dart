@@ -72,11 +72,11 @@ class _FolderVideosScreenState extends State<FolderVideosScreen> {
     super.dispose();
   }
 
-  /// 键盘快捷键：F11 切换全屏
+  /// 键盘快捷键：F11 切换全屏，ESC 返回文件夹列表
   ///
   /// [HardwareKeyboard] 会无条件调用所有已注册的 handler，而播放页也注册了
-  /// F11，因此这里必须确认本页位于最上层，否则同一次按键会被两页各处理一次
-  /// （先进全屏再退全屏，等于没反应）。
+  /// F11/ESC，因此这里必须确认本页位于最上层，否则同一次按键会被两页各处理
+  /// 一次（先进全屏再退全屏，等于没反应）。
   /// 全屏切换只由 F11 负责，ESC 不再具备退出全屏功能。
   bool _hardwareKeyHandler(KeyEvent event) {
     if (event is! KeyDownEvent) return false;
@@ -84,6 +84,11 @@ class _FolderVideosScreenState extends State<FolderVideosScreen> {
     final key = event.logicalKey;
     if (key == LogicalKeyboardKey.f11) {
       _toggleFullscreen();
+      return true;
+    }
+    if (key == LogicalKeyboardKey.escape) {
+      // 返回上一页；若当前处于全屏，由 build 中的 PopScope 统一恢复窗口
+      Navigator.maybePop(context);
       return true;
     }
     return false;
@@ -164,9 +169,9 @@ class _FolderVideosScreenState extends State<FolderVideosScreen> {
     unawaited(_preloadNextBatch());
   }
 
-  /// 读取一批视频的宽高比，完成后一次性更新（避免频繁 setState）
+  /// 读取一批视频的宽高比与真实分辨率，完成后一次性更新（避免频繁 setState）
   ///
-  /// Android 端 MediaStore 已直接给出宽高比，只有未索引到尺寸的视频
+  /// Android 端 MediaStore 已直接给出宽高比与分辨率，只有未索引到尺寸的视频
   /// 才需要走文件解析，因此这里先过滤再解析。
   Future<void> _loadAspectRatios(List<VideoItem> batch) async {
     final pendingIndexes = <int>[];
@@ -179,7 +184,7 @@ class _FolderVideosScreenState extends State<FolderVideosScreen> {
     }
     if (pendingPaths.isEmpty) return;
 
-    final ratios = await VideoScanService.readAspectRatios(pendingPaths);
+    final infos = await VideoScanService.readSizes(pendingPaths);
     if (!mounted) return;
     setState(() {
       // 建立 路径→索引 映射，避免逐项 indexWhere 导致 O(n²)
@@ -193,14 +198,19 @@ class _FolderVideosScreenState extends State<FolderVideosScreen> {
       }
 
       for (var k = 0; k < pendingPaths.length; k++) {
-        final ratio = ratios[k];
-        if (ratio == null) continue;
+        final info = infos[k];
+        // 宽高比与分辨率都拿不到时跳过（保持原样）
+        if (info.aspectRatio == null && info.width == null) continue;
         final i = pendingIndexes[k];
         final item = batch[i];
         final updated = VideoItem(
           name: item.name,
           path: item.path,
-          aspectRatio: ratio,
+          aspectRatio: info.aspectRatio ?? item.aspectRatio,
+          modifiedTime: item.modifiedTime,
+          sizeBytes: item.sizeBytes,
+          width: info.width ?? item.width,
+          height: info.height ?? item.height,
         );
         // 更新全部列表
         final allIndex = allIndexByPath[item.path];
@@ -374,9 +384,8 @@ class _FolderVideosScreenState extends State<FolderVideosScreen> {
   Widget build(BuildContext context) {
     final loc = AppLocalizations.of(context);
     // 卡片右下角按钮的图标/颜色/提示随「删除行为」设置变化，需要随设置重建
-    final deleteExcludes =
-        Provider.of<SettingsProvider>(context, listen: true).deleteAction ==
-        DeleteAction.exclude;
+    final settings = Provider.of<SettingsProvider>(context, listen: true);
+    final deleteExcludes = settings.deleteAction == DeleteAction.exclude;
     // 返回上一页时先退出全屏，避免带着无边框全屏窗口回到上一页
     return PopScope(
       onPopInvokedWithResult: (didPop, result) {
@@ -427,7 +436,11 @@ class _FolderVideosScreenState extends State<FolderVideosScreen> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(Icons.movie_outlined, size: 64, color: Colors.grey),
+                    const Icon(
+                      Icons.movie_outlined,
+                      size: 64,
+                      color: Colors.grey,
+                    ),
                     const SizedBox(height: 16),
                     Text(
                       loc.noVideosInFolder,
@@ -438,6 +451,7 @@ class _FolderVideosScreenState extends State<FolderVideosScreen> {
               )
             : MasonryVideoGrid(
                 items: _items,
+                fileListInfo: settings.fileListInfo,
                 selectedIndex: _selectedIndex,
                 hasMore: _items.length < _allItems.length,
                 onLoadMore: _loadMore,

@@ -192,6 +192,22 @@ class SlideProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 重新洗牌开始下一轮，并保证新顺序的第一个不是刚播完的那个视频。
+  ///
+  /// 只做一次「与随机另一位置交换」：比反复重抽更简单（一次必成功），
+  /// 也不会像「本轮跳过」那样改变这一轮实际会播的视频数量。
+  void reshuffleForNextRound() {
+    if (_videos.length <= 1) return;
+    shuffleVideos();
+    if (_randomOrder.isEmpty || _randomOrder.first != _currentIndex) return;
+    final swapPos =
+        1 + DateTime.now().microsecondsSinceEpoch % (_randomOrder.length - 1);
+    final first = _randomOrder[0];
+    _randomOrder[0] = _randomOrder[swapPos];
+    _randomOrder[swapPos] = first;
+    notifyListeners();
+  }
+
   /// 增量添加新视频（边扫描边播放时使用）
   /// 按排序顺序插入到正确位置，保证列表始终有序，不重置当前索引
   void addNewVideos(List<VideoItem> newVideos, PlayOrder order) {

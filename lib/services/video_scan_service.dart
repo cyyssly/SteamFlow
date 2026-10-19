@@ -2,16 +2,11 @@ import 'dart:io';
 import 'package:steam_flow/models/video_item.dart';
 import 'package:steam_flow/providers/settings_provider.dart';
 import 'package:steam_flow/services/media_store_service.dart';
+import 'package:steam_flow/services/video_formats.dart';
 import 'package:steam_flow/services/video_thumbnail_service.dart';
 
 /// 视频扫描与元数据读取服务
 class VideoScanService {
-  /// 支持的视频容器格式。
-  ///
-  /// 只保留现代主流格式：mkv / webm 在 Windows 与 Android 上都能取到首帧，
-  /// 更冷门的容器（avi/wmv/flv 等）各平台解码器支持参差不齐，故不纳入。
-  static const supportedExtensions = {'mp4', 'm4v', 'mov', 'mkv', 'webm'};
-
   /// 扫描文件夹中的视频（Android 走 MediaStore，桌面走文件系统）
   static Future<List<VideoItem>> scanFolder(
     String folderPath,
@@ -21,7 +16,7 @@ class VideoScanService {
     if (Platform.isAndroid) {
       // MediaStore 已索引好宽高，直接透传，调用方无需再取首帧
       final videos = await MediaStoreService.getFolderVideos(folderPath);
-      return videos.where((item) => isSupportedVideo(item.path)).toList();
+      return videos.where((item) => isSupportedVideoPath(item.path)).toList();
     }
 
     // 桌面端使用文件系统 API
@@ -38,23 +33,30 @@ class VideoScanService {
       files = entities.whereType<File>().toList();
     }
 
-    return files
-        .where((file) => isSupportedVideo(file.path))
-        .map(
-          (file) => VideoItem(
-            name: file.path.split(Platform.pathSeparator).last,
-            path: file.path,
-          ),
-        )
-        .toList();
-  }
-
-  /// 判断是否为支持的视频格式
-  static bool isSupportedVideo(String path) {
-    final dotIndex = path.lastIndexOf('.');
-    if (dotIndex == -1) return false;
-    final ext = path.toLowerCase().substring(dotIndex + 1);
-    return supportedExtensions.contains(ext);
+    final items = <VideoItem>[];
+    for (final file in files) {
+      if (!isSupportedVideoPath(file.path)) continue;
+      // 文件大小与修改时间在此读入，避免瀑布流卡片在 build 里同步读盘。
+      // 分辨率此处未知（无法从文件头解析），由后续取帧时（[readSizes]）补齐。
+      DateTime? modifiedTime;
+      int? sizeBytes;
+      try {
+        final stat = await file.stat();
+        modifiedTime = stat.modified;
+        sizeBytes = stat.size;
+      } catch (_) {
+        // 文件被占用/权限不足时忽略，对应信息显示为「未知」
+      }
+      items.add(
+        VideoItem(
+          name: file.path.split(Platform.pathSeparator).last,
+          path: file.path,
+          modifiedTime: modifiedTime,
+          sizeBytes: sizeBytes,
+        ),
+      );
+    }
+    return items;
   }
 
   /// 批量读取视频宽高比（宽/高），无法取帧的项为 null。
@@ -64,4 +66,8 @@ class VideoScanService {
   /// 既拿到宽高比，也把缩略图填进缓存供瀑布流卡片直接显示。
   static Future<List<double?>> readAspectRatios(List<String> paths) =>
       VideoThumbnailService.readAspectRatios(paths);
+
+  /// 批量读取视频的宽高比与真实分辨率（同时把缩略图填入缓存）。
+  static Future<List<VideoFrameInfo>> readSizes(List<String> paths) =>
+      VideoThumbnailService.readSizes(paths);
 }

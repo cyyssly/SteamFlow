@@ -83,7 +83,6 @@ void main() {
       l10n.transitionAnimation,
       l10n.windowFullscreen,
       l10n.filesAndDirs,
-      l10n.infoDisplay,
       l10n.controlsLabel,
     ]) {
       expect(find.text(title), findsWidgets, reason: '缺少分组标题：$title');
@@ -116,16 +115,17 @@ void main() {
       expect(inColumn(other, title), findsNothing, reason: '$title 不应出现在另一栏');
     }
 
-    // 左栏（第 1 栏）应包含这些分组。
-    for (final title in ['languageLabel', 'videoDisplay', 'windowFullscreen']) {
+    // 左栏（第 1 栏）应包含这些分组（「文件与目录」按需求钉在左栏）。
+    for (final title in [
+      'languageLabel',
+      'videoDisplay',
+      'windowFullscreen',
+      'filesAndDirs',
+    ]) {
       expectOnlyIn(left, right, _titleOf(l10n, title));
     }
     // 右栏（第 2 栏）应包含这些分组。
-    for (final title in [
-      'playSettings',
-      'transitionAnimation',
-      'infoDisplay',
-    ]) {
+    for (final title in ['playSettings', 'transitionAnimation']) {
       expectOnlyIn(right, left, _titleOf(l10n, title));
     }
 
@@ -150,8 +150,8 @@ String _titleOf(AppLocalizations l10n, String name) {
       return l10n.transitionAnimation;
     case 'windowFullscreen':
       return l10n.windowFullscreen;
-    case 'infoDisplay':
-      return l10n.infoDisplay;
+    case 'filesAndDirs':
+      return l10n.filesAndDirs;
     default:
       throw ArgumentError('未知分组：$name');
   }

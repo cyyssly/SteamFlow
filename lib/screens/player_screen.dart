@@ -41,8 +41,23 @@ class _PlayerScreenState extends State<PlayerScreen>
   int? _videoHeight;
   String? _playbackError;
 
+  /// 进入本页时是否已经处于全屏。
+  ///
+  /// 从瀑布流页直接进播放时，全屏可能是瀑布流自己（F11）开的；退出播放时必须
+  /// 按进入前的状态还原：进入前是全屏就保持全屏（否则会把瀑布流的全屏一并吃
+  /// 掉），进入前是窗口才还原窗口尺寸与位置。
+  bool _wasFullscreenBeforePlayback = false;
+
   /// 进度拖拽（进度条或横向滑动）中的预览位置；非 null 时优先显示它
   Duration? _seekPreview;
+
+  /// 播放器音量（0~100）。工具栏音量图标的形态与滑杆值都取自它。
+  double _volume = 100;
+
+  /// 工具栏「单一循环」开关：只循环当前视频，播完不跳下一个。
+  ///
+  /// 与设置页的「循环播放」（整批文件播完后的行为）是两个独立概念，互不影响。
+  bool _singleLoop = false;
 
   /// 播放器事件流订阅
   final List<StreamSubscription<dynamic>> _playerSubs = [];
@@ -73,7 +88,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// 工具栏一闪就消失、自动播放计时器被取消），表现为“按钮点了没反应”。
   Offset? _pointerDownPosition;
 
-  /// 顶部工具栏（AppBar）、底部按钮行的位置引用，
+  /// 顶部工具栏（AppBar）、底部工具栏（含信息栏、进度条、按钮行）的位置引用，
   /// 用于判断按下的落点是否在工具栏内（见 [_isPointOnToolbar]）。
   final GlobalKey _topControlsKey = GlobalKey();
   final GlobalKey _bottomControlsKey = GlobalKey();
@@ -183,8 +198,6 @@ class _PlayerScreenState extends State<PlayerScreen>
   VideoOrientation _lastOrientation = VideoOrientation.followSystem;
   int _lastControlsHideDelay = -1;
   bool _lastHideToolbar = true;
-  int _lastInfoHideDelay = -1;
-  bool _lastInfoAutoHide = true;
   bool _lastLoopPlay = false;
 
   /// 当前视频的原始像素尺寸，用于计算平移边界与自动旋转。
@@ -205,19 +218,21 @@ class _PlayerScreenState extends State<PlayerScreen>
     // 播放时保持屏幕常亮，避免进入省电模式自动熄屏
     WakelockPlus.enable();
 
+    // 记录进入播放前的全屏状态，供退出播放时决定是保持全屏还是还原窗口
+    _wasFullscreenBeforePlayback = FullscreenService.instance.isFullscreen;
+
     // 创建播放内核：Player 负责解码，VideoController 提供渲染纹理。
     // MediaKit.ensureInitialized() 已在 main 中调用，此处可直接构造。
     _player = Player();
     _videoController = VideoController(_player);
     _transitionController = AnimationController(vsync: this);
+    _volume = _player.state.volume;
     _listenPlayer();
 
     // 初始化最近一次设置快照，避免首帧误判为设置变更
     _lastOrientation = settings.videoOrientation;
     _lastControlsHideDelay = settings.controlsHideDelay;
     _lastHideToolbar = settings.hideToolbar;
-    _lastInfoHideDelay = settings.infoHideDelay;
-    _lastInfoAutoHide = settings.infoAutoHide;
     _lastLoopPlay = settings.loopPlay;
 
     // 注册全局键盘监听器，不依赖 FocusNode
@@ -275,6 +290,11 @@ class _PlayerScreenState extends State<PlayerScreen>
           if (mounted) setState(() => _videoDuration = value);
         }),
       )
+      ..add(
+        stream.volume.listen((value) {
+          if (mounted) setState(() => _volume = value);
+        }),
+      )
       ..add(stream.width.listen((value) => _onVideoSizeChanged(value, null)))
       ..add(stream.height.listen((value) => _onVideoSizeChanged(null, value)))
       ..add(
@@ -297,9 +317,39 @@ class _PlayerScreenState extends State<PlayerScreen>
       return;
     }
     final settings = Provider.of<SettingsProvider>(context, listen: false);
-    if (settings.loopPlay) return; // PlaylistMode.single 会自行重播
+
+    // 单一循环：交给播放器自己重播当前视频，不进入下一个
+    if (_singleLoop) return;
+
     setState(() => _completed = true);
-    // 保留播放意图，切换到下一个视频后自动继续播放
+
+    final slideProvider = Provider.of<SlideProvider>(context, listen: false);
+    final isRandom = settings.playOrder == PlayOrder.random;
+    // 是否已播到本批次的最后一个。
+    // 随机模式是「洗牌后的固定顺序」，末尾即随机序列的最后一个元素。
+    final atBatchEnd = isRandom
+        ? slideProvider.isRandomPlaybackComplete()
+        : slideProvider.currentIndex >= slideProvider.videos.length - 1;
+
+    // 「循环播放」关闭：播完本批最后一个就停止播放并退回进入播放前的页面
+    if (!settings.loopPlay) {
+      if (atBatchEnd) {
+        _exitPlayback();
+        return;
+      }
+      _nextVideo();
+      return;
+    }
+
+    // 「循环播放」开启：随机模式一轮走完后重新洗牌，再从新顺序的第一个继续
+    if (isRandom && atBatchEnd) {
+      // 重新洗牌开始下一轮；若新顺序的第一个仍是刚播完的那个视频，交换到别处
+      slideProvider.reshuffleForNextRound();
+      slideProvider.goToStartPosition(PlayOrder.random);
+      return;
+    }
+
+    // 其余情况推进到下一个（顺序/逆序到末尾时由列表取模回到第一个）
     _nextVideo();
   }
 
@@ -365,7 +415,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       _edgeOverflow = 0.0;
     });
 
-    _applyPlaylistMode(settings);
+    _applyPlaylistMode();
     unawaited(_player.open(Media(video.path), play: slideProvider.isPlaying));
 
     if (settings.transitionAnimation == TransitionAnimation.none) {
@@ -377,10 +427,13 @@ class _PlayerScreenState extends State<PlayerScreen>
     _applyScreenOrientation(settings);
   }
 
-  /// 把「循环播放」设置映射为播放器自身的循环模式。
-  void _applyPlaylistMode(SettingsProvider settings) {
+  /// 按工具栏的「单一循环」设置播放器自身的循环模式。
+  void _applyPlaylistMode() {
+    // 只由工具栏的「单一循环」决定播放器自身的循环模式：
+    // 设置页的「循环播放」管的是「一批文件播完之后」的行为，由 _onCompletedChanged
+    // 在应用层处理（本应用在 media_kit 侧始终只有当前这一个 Media）。
     _player.setPlaylistMode(
-      settings.loopPlay ? PlaylistMode.single : PlaylistMode.none,
+      _singleLoop ? PlaylistMode.single : PlaylistMode.none,
     );
   }
 
@@ -417,10 +470,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     // 释放屏幕常亮，恢复系统正常熄屏行为
     WakelockPlus.disable();
 
-    // 确保退出全屏状态，但不调用 setState
-    if (_isFullscreen) {
-      FullscreenService.instance.exit();
-    }
+    // 还原进入播放前的全屏状态，但不调用 setState
+    _restoreFullscreenBeforePlayback();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     // 恢复所有屏幕方向
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
@@ -434,22 +485,14 @@ class _PlayerScreenState extends State<PlayerScreen>
     final controlsChanged =
         settings.controlsHideDelay != _lastControlsHideDelay ||
         settings.hideToolbar != _lastHideToolbar;
-    final infoChanged =
-        settings.infoHideDelay != _lastInfoHideDelay ||
-        settings.infoAutoHide != _lastInfoAutoHide;
     final loopChanged = settings.loopPlay != _lastLoopPlay;
 
     _lastOrientation = settings.videoOrientation;
     _lastControlsHideDelay = settings.controlsHideDelay;
     _lastHideToolbar = settings.hideToolbar;
-    _lastInfoHideDelay = settings.infoHideDelay;
-    _lastInfoAutoHide = settings.infoAutoHide;
     _lastLoopPlay = settings.loopPlay;
 
-    if (!orientationChanged &&
-        !controlsChanged &&
-        !infoChanged &&
-        !loopChanged) {
+    if (!orientationChanged && !controlsChanged && !loopChanged) {
       return;
     }
 
@@ -468,13 +511,12 @@ class _PlayerScreenState extends State<PlayerScreen>
         });
       }
       if (controlsChanged) {
+        // 信息条的自动隐藏与工具栏同源，一起重排计时
         _hideControlsDelayed();
-      }
-      if (infoChanged) {
         _hideInfoDelayed();
       }
       if (loopChanged) {
-        _applyPlaylistMode(settings);
+        _applyPlaylistMode();
       }
     });
   }
@@ -690,12 +732,13 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
+  /// 信息条的自动隐藏与工具栏统一控制：跟随「自动隐藏工具栏」开关与「隐藏延迟」。
   void _hideInfoDelayed() {
     final settings = Provider.of<SettingsProvider>(context, listen: false);
     _hideInfoTimer?.cancel();
-    if (settings.infoAutoHide) {
+    if (settings.hideToolbar) {
       _hideInfoTimer = Timer(
-        Duration(seconds: settings.infoHideDelay),
+        Duration(seconds: settings.controlsHideDelay),
         _hideInfoIfIdle,
       );
     }
@@ -785,6 +828,23 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// 并且缩放手势本身会因多出来的重建而变得不流畅。
   /// 隐藏动作受 [_hideControlsIfIdle] 保护，手指按住期间不会生效。
   void _deferControlHide() {
+    _hideControlsDelayed();
+    _hideInfoDelayed();
+  }
+
+  /// 最近一次因鼠标悬停移动而重置自动隐藏计时的时间，用于节流。
+  DateTime _lastHoverReset = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// 鼠标移动（未按键的悬停移动）算作一次“操作”，顺延工具栏自动隐藏计时。
+  ///
+  /// 桌面端用户常把鼠标停在控制区上操作，若移动鼠标不重置计时，工具栏会在
+  /// 操作途中被自动隐藏。仅在工具栏当前可见时顺延；已隐藏时移动鼠标不应把
+  /// 它重新唤出。悬停事件按像素高频触发，这里做 200ms 节流避免频繁重建计时器。
+  void _onPointerHoverActivity() {
+    if (!_showControls) return;
+    final now = DateTime.now();
+    if (now.difference(_lastHoverReset).inMilliseconds < 200) return;
+    _lastHoverReset = now;
     _hideControlsDelayed();
     _hideInfoDelayed();
   }
@@ -883,6 +943,24 @@ class _PlayerScreenState extends State<PlayerScreen>
     // 重启自动隐藏定时器
     _hideControlsDelayed();
     _hideInfoDelayed();
+  }
+
+  /// 退出播放时还原「进入播放前」的全屏状态。
+  ///
+  /// - 进入前已是全屏（例如在瀑布流里按过 F11）：保持全屏，不能还原窗口，
+  ///   否则会把上一页的全屏状态一并吃掉；
+  /// - 进入前是窗口：还原到进入播放前的窗口尺寸与位置。
+  ///
+  /// 页面销毁与工具栏返回按钮都走这里，避免两处逻辑分叉。
+  void _restoreFullscreenBeforePlayback() {
+    if (_wasFullscreenBeforePlayback) {
+      // 进入前就是全屏：若播放过程中被退出过，这里补回全屏
+      if (!FullscreenService.instance.isFullscreen) {
+        FullscreenService.instance.enter();
+      }
+      return;
+    }
+    FullscreenService.instance.exit();
   }
 
   // ==================== 缩放与平移 ====================
@@ -1196,15 +1274,45 @@ class _PlayerScreenState extends State<PlayerScreen>
     });
   }
 
-  /// 退出播放：暂停播放并返回主界面
-  void _exitPlayback() {
+  /// 离开播放页前的统一收尾：停掉播放，避免页面还没销毁时声音还在继续。
+  ///
+  /// [Player.dispose] 是异步的，不能保证它来得及在页面切换前停掉原生播放，
+  /// 所以退出播放页的每条路径都显式停一次。
+  void _stopPlaybackForExit() {
     final slideProvider = Provider.of<SlideProvider>(context, listen: false);
-    // 如果正在播放，暂停播放
     if (slideProvider.isPlaying) {
       slideProvider.stopPlay();
     }
-    // 返回主界面
-    Navigator.pop(context);
+    unawaited(_player.stop());
+  }
+
+  /// 退出播放：停止播放、还原进入播放前的全屏状态，然后返回主界面。
+  ///
+  /// 还原必须像工具栏返回按钮那样在 pop **之前**完成：dispose 期间 widget 树正在
+  /// 拆除，此时做窗口 FFI 调用（SetWindowLongPtr/SetWindowPos）不可靠，窗口状态
+  /// 来不及生效，表现为退出播放后主界面仍停留在全屏。
+  void _exitPlayback() {
+    _stopPlaybackForExit();
+    _restoreFullscreenBeforePlayback();
+    final navigator = Navigator.of(context);
+    // 延迟一小段时间让窗口状态稳定后再返回
+    Future.delayed(const Duration(milliseconds: 200), () {
+      if (mounted) navigator.pop();
+    });
+  }
+
+  /// 设置播放器音量（0~100）
+  void _setVolume(double value) {
+    final volume = value.clamp(0.0, 100.0).toDouble();
+    _player.setVolume(volume);
+    if (mounted) setState(() => _volume = volume);
+  }
+
+  /// 音量图标随档位变化：0 静音 / 偏低 / 偏高
+  IconData get _volumeIcon {
+    if (_volume <= 0) return Icons.volume_off;
+    if (_volume < 50) return Icons.volume_down;
+    return Icons.volume_up;
   }
 
   bool _hardwareKeyHandler(KeyEvent event) {
@@ -1540,6 +1648,8 @@ class _PlayerScreenState extends State<PlayerScreen>
             autofocus: true,
             child: Listener(
               onPointerSignal: _handleScroll,
+              // 鼠标悬停移动（未按键）也算一次操作，顺延工具栏自动隐藏计时
+              onPointerHover: (_) => _onPointerHoverActivity(),
               // 用于“完全松手”才恢复工具栏：GestureDetector 的 onScaleEnd
               // 无法覆盖“双指后先抬一根手指、另一根继续停住”的情形。
               onPointerDown: (event) {
@@ -1676,20 +1786,17 @@ class _PlayerScreenState extends State<PlayerScreen>
                                 child: IconButton(
                                   icon: const Icon(Icons.arrow_back),
                                   onPressed: () {
-                                    // 如果当前是全屏状态，先退出全屏再返回
-                                    if (_isFullscreen) {
-                                      _exitFullscreen();
-                                      final navigator = Navigator.of(context);
-                                      // 延迟一小段时间让窗口状态稳定后再返回
-                                      Future.delayed(
-                                        const Duration(milliseconds: 200),
-                                        () {
-                                          if (mounted) navigator.pop();
-                                        },
-                                      );
-                                    } else {
-                                      Navigator.pop(context);
-                                    }
+                                    // 先停掉播放，再还原进入播放前的全屏状态；
+                                    // 延迟一小段时间让窗口状态稳定
+                                    _stopPlaybackForExit();
+                                    _restoreFullscreenBeforePlayback();
+                                    final navigator = Navigator.of(context);
+                                    Future.delayed(
+                                      const Duration(milliseconds: 200),
+                                      () {
+                                        if (mounted) navigator.pop();
+                                      },
+                                    );
                                   },
                                 ),
                               ),
@@ -1716,6 +1823,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                                           : _enterFullscreen,
                                     ),
                                   ),
+                                // 循环播放与音量按钮已移到下方播放工具栏
                                 Tooltip(
                                   message:
                                       settings.deleteAction ==
@@ -1769,6 +1877,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                             left: 0,
                             right: 0,
                             child: Container(
+                              key: _bottomControlsKey,
                               color: Colors.black.withValues(alpha: 0.5),
                               padding: const EdgeInsets.all(16),
                               child: Column(
@@ -1887,9 +1996,39 @@ class _PlayerScreenState extends State<PlayerScreen>
                                     ],
                                   ),
                                   Row(
-                                    key: _bottomControlsKey,
                                     mainAxisAlignment: MainAxisAlignment.center,
                                     children: [
+                                      // 单一循环：只循环当前视频，播完不跳下一个。
+                                      // 与设置页的「循环播放」（整批播完后的行为）互不影响。
+                                      // 图标比相邻的主按钮小一档。
+                                      Tooltip(
+                                        message: AppLocalizations.of(
+                                          context,
+                                        ).singleLoop,
+                                        child: IconButton(
+                                          icon: Icon(
+                                            _singleLoop
+                                                ? Icons.repeat_one
+                                                : Icons.repeat,
+                                            size: 24,
+                                            color: _singleLoop
+                                                ? Colors.lightBlueAccent
+                                                : Colors.white,
+                                          ),
+                                          constraints: const BoxConstraints(
+                                            minWidth: 36,
+                                            minHeight: 36,
+                                          ),
+                                          padding: EdgeInsets.zero,
+                                          onPressed: () {
+                                            setState(
+                                              () => _singleLoop = !_singleLoop,
+                                            );
+                                            _applyPlaylistMode();
+                                          },
+                                        ),
+                                      ),
+                                      const SizedBox(width: 16),
                                       IconButton(
                                         icon: const Icon(
                                           Icons.skip_previous,
@@ -1923,6 +2062,109 @@ class _PlayerScreenState extends State<PlayerScreen>
                                         onPressed: () {
                                           _nextVideo();
                                           _showControlsTemporarily();
+                                        },
+                                      ),
+                                      const SizedBox(width: 16),
+                                      // 音量：控制播放器自身音量（0~100）。
+                                      // 弹出的是竖向滑杆：最小值在下、最大值在上。
+                                      PopupMenuButton<double>(
+                                        tooltip: AppLocalizations.of(
+                                          context,
+                                        ).volume,
+                                        icon: Icon(
+                                          _volumeIcon,
+                                          size: 24,
+                                          color: Colors.white,
+                                        ),
+                                        constraints: const BoxConstraints(
+                                          minWidth: 36,
+                                          minHeight: 36,
+                                        ),
+                                        padding: EdgeInsets.zero,
+                                        itemBuilder: (context) {
+                                          // 弹层打开期间的本地预览音量：拖动中只改这里，
+                                          // 松手才写回播放器与页面状态。避免每个像素都触发
+                                          // mpv 调用与整页重建，也避免语义值高频抖动
+                                          // （Windows 无障碍层会在此时进入引擎的
+                                          // 无障碍路径，深递归导致崩溃）。
+                                          var previewVolume = _volume;
+                                          return [
+                                            PopupMenuItem<double>(
+                                              // enabled: false 让滑杆自己接收手势，
+                                              // 点击/拖动滑杆时不会把菜单一起关掉
+                                              enabled: false,
+                                              padding: EdgeInsets.zero,
+                                              // 该弹层不向无障碍层暴露语义：拖动时数值
+                                              // 高频变化，会诱发 UIA 在引擎无障碍路径上
+                                              // 深递归崩溃
+                                              child: ExcludeSemantics(
+                                                child: SizedBox(
+                                                  width: 56,
+                                                  height: 180,
+                                                  child: StatefulBuilder(
+                                                    builder: (context, setPopupState) => Column(
+                                                      mainAxisAlignment:
+                                                          MainAxisAlignment
+                                                              .center,
+                                                      children: [
+                                                        // 数值用未旋转的 Text 单独显示，
+                                                        // 否则会被 RotatedBox 一起竖起来
+                                                        Text(
+                                                          previewVolume
+                                                              .round()
+                                                              .toString(),
+                                                          style:
+                                                              const TextStyle(
+                                                                color: Colors
+                                                                    .white,
+                                                                fontSize: 13,
+                                                              ),
+                                                        ),
+                                                        const SizedBox(
+                                                          height: 4,
+                                                        ),
+                                                        Expanded(
+                                                          child: RotatedBox(
+                                                            // 3 个 quarterTurns =
+                                                            // 逆时针 90°，滑杆由横向变竖向
+                                                            quarterTurns: 3,
+                                                            child: Slider(
+                                                              value: previewVolume
+                                                                  .clamp(
+                                                                    0.0,
+                                                                    100.0,
+                                                                  )
+                                                                  .toDouble(),
+                                                              max: 100,
+                                                              divisions: 100,
+                                                              // 拖动中只更新弹层预览
+                                                              onChanged: (value) {
+                                                                setPopupState(() {
+                                                                  previewVolume =
+                                                                      value;
+                                                                });
+                                                              },
+                                                              // 松手才真正写回播放器，
+                                                              // 并收起弹层、重启工具栏自动隐藏计时
+                                                              onChangeEnd: (value) {
+                                                                _setVolume(
+                                                                  value,
+                                                                );
+                                                                Navigator.of(
+                                                                  context,
+                                                                ).pop();
+                                                                _hideControlsDelayed();
+                                                              },
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ];
                                         },
                                       ),
                                     ],

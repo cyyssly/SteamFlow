@@ -503,7 +503,9 @@ class MainActivity : FlutterActivity() {
             MediaStore.Video.Media._ID,
             MediaStore.Video.Media.DATA,
             MediaStore.Video.Media.WIDTH,
-            MediaStore.Video.Media.HEIGHT
+            MediaStore.Video.Media.HEIGHT,
+            MediaStore.Video.Media.SIZE,
+            MediaStore.Video.Media.DATE_MODIFIED
         )
 
         // 查询条件：相对路径匹配，或 DATA 列以文件夹路径开头
@@ -532,6 +534,8 @@ class MainActivity : FlutterActivity() {
             val dataIdx = it.getColumnIndex(MediaStore.Video.Media.DATA)
             val widthIdx = it.getColumnIndex(MediaStore.Video.Media.WIDTH)
             val heightIdx = it.getColumnIndex(MediaStore.Video.Media.HEIGHT)
+            val sizeIdx = it.getColumnIndex(MediaStore.Video.Media.SIZE)
+            val dateIdx = it.getColumnIndex(MediaStore.Video.Media.DATE_MODIFIED)
             if (idIdx < 0) return@use
 
             while (it.moveToNext()) {
@@ -542,19 +546,38 @@ class MainActivity : FlutterActivity() {
                 if (videoPath == null || videoPath.isBlank()) continue
 
                 // WIDTH/HEIGHT 可能为 0（MediaStore 尚未扫描到该文件），
-                // 此时返回 null，由 Dart 端回退到解码首帧推导
+                // 此时返回 null，由 Dart 端回退到解码首帧推导宽高比；
+                // 同时把真实像素一并返回，供瀑布流卡片显示「分辨率」。
                 var aspectRatio: Double? = null
+                var width: Int? = null
+                var height: Int? = null
                 if (widthIdx >= 0 && heightIdx >= 0) {
                     val w = it.getInt(widthIdx)
                     val h = it.getInt(heightIdx)
-                    if (w > 0 && h > 0) aspectRatio = w.toDouble() / h.toDouble()
+                    if (w > 0 && h > 0) {
+                        aspectRatio = w.toDouble() / h.toDouble()
+                        width = w
+                        height = h
+                    }
+                }
+
+                val size = if (sizeIdx >= 0 && !it.isNull(sizeIdx)) it.getLong(sizeIdx) else null
+                // DATE_MODIFIED 单位是秒，转成毫秒供 Dart 端直接构造 DateTime
+                val dateModified = if (dateIdx >= 0 && !it.isNull(dateIdx)) {
+                    it.getLong(dateIdx) * 1000L
+                } else {
+                    null
                 }
 
                 videos.add(
                     mapOf(
                         "name" to videoPath.substringAfterLast('/'),
                         "path" to videoPath,
-                        "aspectRatio" to aspectRatio
+                        "aspectRatio" to aspectRatio,
+                        "width" to width,
+                        "height" to height,
+                        "size" to size,
+                        "dateModified" to dateModified
                     )
                 )
             }

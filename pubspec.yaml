@@ -1,7 +1,7 @@
 name: steam_flow
 description: "A cross-platform video player and slideshow application."
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.1.0+2
 
 environment:
   sdk: ^3.12.2
@@ -32,6 +32,18 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.14.3
+
+# media_kit 的 main 分支已修掉「热重载 / 热重启后，mpv 仍调用指向已删除 Dart
+# 回调的 wakeup 句柄，导致 Dart VM 报 Callback invoked after it has been deleted
+# 并直接 abort」这一缺陷（见 media-kit/media-kit#1314、#1430），但尚未发布到
+# pub.dev。因此这里用 dependency_overrides 精确指向该提交；
+# 等上游正式发版后，删掉本段、把版本约束升到对应版本即可。
+dependency_overrides:
+  media_kit:
+    git:
+      url: https://github.com/media-kit/media-kit.git
+      ref: c533e446755f51cf53c7e57aea873f2aa5355f81
+      path: media_kit
 
 flutter_launcher_icons:
   android: true

@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:steam_flow/models/video_item.dart';
+import 'package:steam_flow/services/video_formats.dart';
 
 class AlbumInfo {
   final String path;
@@ -107,10 +108,20 @@ class MediaStoreService {
       return list.map((item) {
         final map = Map<String, dynamic>.from(item as Map);
         final ratio = map['aspectRatio'];
+        final width = (map['width'] as num?)?.toInt();
+        final height = (map['height'] as num?)?.toInt();
+        final size = (map['size'] as num?)?.toInt();
+        final dateModified = (map['dateModified'] as num?)?.toInt();
         return VideoItem(
           name: map['name'] as String,
           path: map['path'] as String,
           aspectRatio: ratio is num ? ratio.toDouble() : null,
+          width: (width != null && width > 0) ? width : null,
+          height: (height != null && height > 0) ? height : null,
+          sizeBytes: size,
+          modifiedTime: dateModified == null
+              ? null
+              : DateTime.fromMillisecondsSinceEpoch(dateModified),
         );
       }).toList();
     } catch (e) {
@@ -216,8 +227,6 @@ foreach (\$p in \$paths) {
       '/storage/emulated/0/Bluetooth',
     ];
 
-    const supportedExtensions = {'mp4', 'm4v', 'mov', 'mkv', 'webm'};
-
     final albums = <AlbumInfo>[];
 
     Future<({int count, String? firstVideo})> scanDir(String dirPath) async {
@@ -228,8 +237,7 @@ foreach (\$p in \$paths) {
       try {
         await for (final entity in dir.list(recursive: false)) {
           if (entity is File) {
-            final ext = entity.path.split('.').last.toLowerCase();
-            if (supportedExtensions.contains(ext)) {
+            if (isSupportedVideoPath(entity.path)) {
               count++;
               firstVideo ??= entity.path;
             }

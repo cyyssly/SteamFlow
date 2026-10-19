@@ -110,6 +110,8 @@ class AppLocalizations {
   String get loopPlay => _t('循环播放', 'Loop', '循環播放');
   String get loopPlayDesc =>
       _t('关闭：播完停止；开启：首尾循环', 'Off: stop at end; On: loop', '關閉：播完停止；開啟：首尾循環');
+  String get volume => _t('音量', 'Volume', '音量');
+  String get singleLoop => _t('单一循环', 'Single Loop', '單一循環');
   String get autoPlay => _t('自动播放', 'Auto Play', '自動播放');
   String get autoPlayDesc =>
       _t('进入应用后立即开始播放', 'Start playback on launch', '進入應用後立即開始播放');
@@ -157,17 +159,22 @@ class AppLocalizations {
     'Play videos from subfolders too',
     '開啟後連子文件夾裡的視頻一起播放',
   );
-  String get infoDisplay => _t('信息显示', 'Info', '信息顯示');
+  String get fileListInfo => _t('文件列表信息', 'File List Info', '文件列表信息');
+  String get fileListInfoDesc => _t(
+    '选中项显示在瀑布流卡片下方',
+    'Show the selected field under each grid card',
+    '選中項顯示在瀑布流卡片下方',
+  );
+  String get fileListInfoNone => _t('不显示', 'None', '不顯示');
+  String get fileListInfoName => _t('文件名', 'Name', '文件名');
+  String get fileListInfoNameDateSize =>
+      _t('文件名+日期+大小', 'Name + Date + Size', '文件名+日期+大小');
   String get showVideoInfo => _t('视频信息显示', 'Show Info', '視頻信息顯示');
   String get showVideoInfoDesc => _t(
     '文件名/文件大小/分辨率/当前序号',
     'Name / Size / Resolution / Index',
     '文件名/文件大小/分辨率/當前序號',
   );
-  String get infoAutoHideLabel => _t('信息条自动隐藏', 'Auto-hide Info', '信息條自動隱藏');
-  String get infoAutoHideDesc =>
-      _t('几秒无操作自动消失', 'Hide after idle seconds', '幾秒無操作自動消失');
-  String get infoHideDelay => _t('信息隐藏延迟', 'Info Hide Delay', '信息隱藏延遲');
   String get controlsLabel => _t('快捷键与控制', 'Controls', '快捷鍵與控制');
   String get wheelSwitch => _t('滚轮行为', 'Scroll Wheel', '滾輪行為');
   String get wheelSwitchVideo => _t('切换视频', 'Switch Video', '切換視頻');
@@ -361,9 +368,9 @@ class AppLocalizations {
     '可添加多個文件夾，可選擇是否包含子文件夾，自動去重並統計數量',
   );
   String get helpFormats => _t(
-    '支持 MP4、M4V、MOV、MKV、WebM 等常见格式',
-    'Supports MP4, M4V, MOV, MKV, WebM and more',
-    '支援 MP4、M4V、MOV、MKV、WebM 等常見格式',
+    '支持 MP4、M4V、MOV、MKV、WebM、AVI、WMV 等常见格式',
+    'Supports MP4, M4V, MOV, MKV, WebM, AVI, WMV and more',
+    '支援 MP4、M4V、MOV、MKV、WebM、AVI、WMV 等常見格式',
   );
   String get helpExclude => _t(
     '排除播放：把不想看的视频移出播放列表（不删除文件），已排除的视频可恢复或实际删除，也可以移动或者复制到其他位置',

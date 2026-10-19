@@ -33,6 +33,15 @@ enum VideoOrientation {
   followVideo, // 跟随视频
 }
 
+/// 瀑布流卡片下方展示的文件信息（单选）。
+///
+/// 按下标持久化到 SharedPreferences，新增项请追加在末尾。
+enum FileListInfo {
+  none, // 不显示
+  name, // 文件名
+  nameDateSize, // 文件名 + 日期 + 大小
+}
+
 class SettingsProvider extends ChangeNotifier {
   // 播放基础设置
   PlayOrder _playOrder = PlayOrder.newPreferred;
@@ -56,14 +65,13 @@ class SettingsProvider extends ChangeNotifier {
 
   // 文件与目录相关
   bool _recursiveScan = true;
+  FileListInfo _fileListInfo = FileListInfo.none;
 
   String? _lastFolderPath;
   List<String> _lastFolderPaths = [];
 
-  // 信息显示设置
+  // 视频底部信息条是否显示（自动隐藏跟随「工具栏」设置统一控制）
   bool _showVideoInfo = false;
-  bool _infoAutoHide = true;
-  int _infoHideDelay = 3;
 
   // 快捷键与控制
   bool _wheelSwitchVideo = true;
@@ -90,13 +98,12 @@ class SettingsProvider extends ChangeNotifier {
   int get controlsHideDelay => _controlsHideDelay;
   bool get keepControlsOnPause => _keepControlsOnPause;
   bool get recursiveScan => _recursiveScan;
+  FileListInfo get fileListInfo => _fileListInfo;
 
   String? get lastFolderPath => _lastFolderPath;
   List<String> get lastFolderPaths => _lastFolderPaths;
 
   bool get showVideoInfo => _showVideoInfo;
-  bool get infoAutoHide => _infoAutoHide;
-  int get infoHideDelay => _infoHideDelay;
   bool get wheelSwitchVideo => _wheelSwitchVideo;
   DeleteAction get deleteAction => _deleteAction;
   int get languageIndex => _languageIndex;
@@ -180,6 +187,13 @@ class SettingsProvider extends ChangeNotifier {
     _saveSettings();
   }
 
+  /// 设置瀑布流卡片下方展示的文件信息（单选）。
+  void setFileListInfo(FileListInfo value) {
+    _fileListInfo = value;
+    notifyListeners();
+    _saveSettings();
+  }
+
   void setLastFolderPath(String? value) {
     _lastFolderPath = value;
     notifyListeners();
@@ -194,18 +208,6 @@ class SettingsProvider extends ChangeNotifier {
 
   void setShowVideoInfo(bool value) {
     _showVideoInfo = value;
-    notifyListeners();
-    _saveSettings();
-  }
-
-  void setInfoAutoHide(bool value) {
-    _infoAutoHide = value;
-    notifyListeners();
-    _saveSettings();
-  }
-
-  void setInfoHideDelay(int value) {
-    _infoHideDelay = value;
     notifyListeners();
     _saveSettings();
   }
@@ -295,6 +297,12 @@ class SettingsProvider extends ChangeNotifier {
     _controlsHideDelay = prefs.getInt('controlsHideDelay') ?? 3;
     _keepControlsOnPause = prefs.getBool('keepControlsOnPause') ?? false;
     _recursiveScan = prefs.getBool('recursiveScan') ?? true;
+    // 下标做边界保护，避免旧值越界导致启动崩溃
+    final fileListInfoIndex = (prefs.getInt('fileListInfoMode') ?? 0).clamp(
+      0,
+      FileListInfo.values.length - 1,
+    );
+    _fileListInfo = FileListInfo.values[fileListInfoIndex];
 
     _lastFolderPath = prefs.getString('lastFolderPath');
     final lastFolderPathsStr = prefs.getString('lastFolderPaths');
@@ -302,8 +310,6 @@ class SettingsProvider extends ChangeNotifier {
       _lastFolderPaths = json.decode(lastFolderPathsStr).cast<String>();
     }
     _showVideoInfo = prefs.getBool('showVideoInfo') ?? false;
-    _infoAutoHide = prefs.getBool('infoAutoHide') ?? true;
-    _infoHideDelay = prefs.getInt('infoHideDelay') ?? 3;
 
     final excludedStr = prefs.getString('excludedPaths');
     if (excludedStr != null) {
@@ -334,14 +340,13 @@ class SettingsProvider extends ChangeNotifier {
     await prefs.setInt('controlsHideDelay', _controlsHideDelay);
     await prefs.setBool('keepControlsOnPause', _keepControlsOnPause);
     await prefs.setBool('recursiveScan', _recursiveScan);
+    await prefs.setInt('fileListInfoMode', _fileListInfo.index);
 
     await prefs.setString('lastFolderPath', _lastFolderPath ?? '');
     await prefs.setString('lastFolderPaths', json.encode(_lastFolderPaths));
     await prefs.setInt('deleteAction', _deleteAction.index);
     await prefs.setBool('showVideoInfo', _showVideoInfo);
     await prefs.setInt('languageIndex', _languageIndex);
-    await prefs.setBool('infoAutoHide', _infoAutoHide);
-    await prefs.setInt('infoHideDelay', _infoHideDelay);
     await prefs.setBool('wheelSwitchVideo', _wheelSwitchVideo);
     await prefs.setString('excludedPaths', json.encode(_excludedPaths));
     await prefs.setInt('videoOrientation', _videoOrientation.index);

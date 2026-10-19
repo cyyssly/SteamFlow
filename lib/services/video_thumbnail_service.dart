@@ -13,6 +13,15 @@ import 'package:steam_flow/services/video_thumbnail_win.dart';
 /// 免得调用方到处 import 底层实现。
 export 'video_thumbnail_win.dart' show VideoThumbnail;
 
+/// 一次取帧得到的视频信息：宽高比与真实分辨率（不可用时为 null）。
+class VideoFrameInfo {
+  final double? aspectRatio;
+  final int? width;
+  final int? height;
+
+  const VideoFrameInfo({this.aspectRatio, this.width, this.height});
+}
+
 /// 视频缩略图服务：统一封装各平台的取帧方式，并做内存缓存与去重。
 ///
 /// - Windows：Shell 缩略图接口（[windowsVideoThumbnailSync]），整批丢进后台 isolate；
@@ -50,7 +59,30 @@ class VideoThumbnailService {
   /// 不会出现「先渲染成正方形、再跳变成真实比例」的抖动。
   static Future<List<double?>> readAspectRatios(List<String> paths) async {
     if (paths.isEmpty) return const [];
+    final thumbs = await _loadAll(paths);
+    return [for (final thumb in thumbs) thumb?.aspectRatio];
+  }
 
+  /// 批量读取宽高比与真实分辨率（同时把缩略图填进缓存）。
+  ///
+  /// 真实分辨率只有 Windows 端能拿到（见 `VideoThumbnail.sourceWidth`）：
+  /// 缩略图会被等比缩放，其位图尺寸只能反映宽高比，不能当分辨率用，
+  /// 因此 Android 端此处为 null，分辨率改由 MediaStore 直接提供。
+  static Future<List<VideoFrameInfo>> readSizes(List<String> paths) async {
+    if (paths.isEmpty) return const [];
+    final thumbs = await _loadAll(paths);
+    return [
+      for (final thumb in thumbs)
+        VideoFrameInfo(
+          aspectRatio: thumb?.aspectRatio,
+          width: thumb?.sourceWidth,
+          height: thumb?.sourceHeight,
+        ),
+    ];
+  }
+
+  /// 逐项取缩略图（命中缓存则直接复用），未命中部分整批加载。
+  static Future<List<VideoThumbnail?>> _loadAll(List<String> paths) async {
     final thumbs = List<VideoThumbnail?>.filled(paths.length, null);
     final missingPaths = <String>[];
     final missingIndexes = <int>[];
@@ -73,7 +105,7 @@ class VideoThumbnailService {
       }
     }
 
-    return [for (final thumb in thumbs) thumb?.aspectRatio];
+    return thumbs;
   }
 
   static Future<VideoThumbnail?> _load(String path) async {

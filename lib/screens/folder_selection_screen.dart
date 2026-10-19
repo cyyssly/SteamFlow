@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:steam_flow/providers/slide_provider.dart';
 import 'package:steam_flow/providers/settings_provider.dart';
@@ -8,6 +9,7 @@ import 'package:steam_flow/screens/excluded_videos_screen.dart';
 import 'package:steam_flow/screens/folder_videos_screen.dart';
 import 'package:steam_flow/services/directory_picker_service.dart';
 import 'package:steam_flow/services/media_store_service.dart';
+import 'package:steam_flow/services/video_formats.dart';
 import 'package:steam_flow/services/video_thumbnail_service.dart';
 import 'package:steam_flow/l10n/app_localizations.dart';
 
@@ -244,8 +246,6 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
     );
 
     try {
-      const supportedExtensions = {'mp4', 'm4v', 'mov', 'mkv', 'webm'};
-
       int videoCount = 0;
       int subfolderCount = 0;
 
@@ -253,25 +253,13 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
         // Android 端通过 MediaStore 查询（绕过 Scoped Storage 限制）
         final videos = await MediaStoreService.getFolderVideos(folderPath);
         for (final item in videos) {
-          final dotIndex = item.path.lastIndexOf('.');
-          if (dotIndex != -1) {
-            final ext = item.path.toLowerCase().substring(dotIndex + 1);
-            if (supportedExtensions.contains(ext)) {
-              videoCount++;
-            }
-          }
+          if (isSupportedVideoPath(item.path)) videoCount++;
         }
       } else if (settingsProvider.recursiveScan) {
         final dir = Directory(folderPath);
         await for (var entity in dir.list(recursive: true)) {
           if (entity is File) {
-            final dotIndex = entity.path.lastIndexOf('.');
-            if (dotIndex != -1) {
-              final ext = entity.path.toLowerCase().substring(dotIndex + 1);
-              if (supportedExtensions.contains(ext)) {
-                videoCount++;
-              }
-            }
+            if (isSupportedVideoPath(entity.path)) videoCount++;
           } else if (entity is Directory) {
             subfolderCount++;
           }
@@ -280,15 +268,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
         final dir = Directory(folderPath);
         final entities = await dir.list().toList();
         for (var entity in entities) {
-          if (entity is File) {
-            final dotIndex = entity.path.lastIndexOf('.');
-            if (dotIndex != -1) {
-              final ext = entity.path.toLowerCase().substring(dotIndex + 1);
-              if (supportedExtensions.contains(ext)) {
-                videoCount++;
-              }
-            }
-          }
+          if (entity is File && isSupportedVideoPath(entity.path)) videoCount++;
         }
       }
 
@@ -645,18 +625,11 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
     String folderPath,
     SettingsProvider settings,
   ) async {
-    const supportedExtensions = {'mp4', 'm4v', 'mov', 'mkv', 'webm'};
-
     // Android 端通过 MediaStore 查询（绕过 Scoped Storage 限制）
     if (Platform.isAndroid) {
       // 直接透传 VideoItem，保留 MediaStore 已索引好的宽高比
       final videos = await MediaStoreService.getFolderVideos(folderPath);
-      return videos.where((item) {
-        final dotIndex = item.path.lastIndexOf('.');
-        if (dotIndex == -1) return false;
-        final ext = item.path.toLowerCase().substring(dotIndex + 1);
-        return supportedExtensions.contains(ext);
-      }).toList();
+      return videos.where((item) => isSupportedVideoPath(item.path)).toList();
     }
 
     // 桌面端使用文件系统 API
@@ -676,12 +649,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
     }
 
     return files
-        .where((file) {
-          final dotIndex = file.path.lastIndexOf('.');
-          if (dotIndex == -1) return false;
-          final ext = file.path.toLowerCase().substring(dotIndex + 1);
-          return supportedExtensions.contains(ext);
-        })
+        .where((file) => isSupportedVideoPath(file.path))
         .map(
           (file) => VideoItem(
             name: file.path.split(Platform.pathSeparator).last,
@@ -696,6 +664,8 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
   @override
   void initState() {
     super.initState();
+    // 注册全局键盘监听：ESC 返回主界面
+    HardwareKeyboard.instance.addHandler(_hardwareKeyHandler);
     // 页面初始化时，对已有的文件夹触发统计计算
     Future.microtask(() {
       if (!mounted) return;
@@ -727,6 +697,27 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
         _countFolderVideos(path);
       }
     }
+  }
+
+  @override
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_hardwareKeyHandler);
+    super.dispose();
+  }
+
+  /// 键盘快捷键：ESC 返回主界面
+  ///
+  /// [HardwareKeyboard] 会无条件调用所有已注册的 handler，而瀑布流页也注册了
+  /// ESC，因此这里必须确认本页位于最上层，否则同一次按键会被两页各处理一次。
+  bool _hardwareKeyHandler(KeyEvent event) {
+    if (event is! KeyDownEvent) return false;
+    if (ModalRoute.of(context)?.isCurrent != true) return false;
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      // 返回主界面
+      Navigator.maybePop(context);
+      return true;
+    }
+    return false;
   }
 
   @override
@@ -996,8 +987,6 @@ class _ThumbnailVideoState extends State<_ThumbnailVideo> {
   /// 只要这个值变了，就说明当前请求已不再是该 State 的最新请求。
   int _requestId = 0;
 
-  static const _supportedExtensions = {'mp4', 'm4v', 'mov', 'mkv', 'webm'};
-
   @override
   void initState() {
     super.initState();
@@ -1059,11 +1048,7 @@ class _ThumbnailVideoState extends State<_ThumbnailVideo> {
     if (Platform.isAndroid) {
       final videos = await MediaStoreService.getFolderVideos(folderPath);
       for (final item in videos) {
-        if (!_supportedExtensions.contains(
-          item.path.split('.').last.toLowerCase(),
-        )) {
-          continue;
-        }
+        if (!isSupportedVideoPath(item.path)) continue;
         final thumbnail = await VideoThumbnailService.thumbnailFor(item.path);
         if (thumbnail != null) return thumbnail;
       }
@@ -1074,13 +1059,11 @@ class _ThumbnailVideoState extends State<_ThumbnailVideo> {
     if (await dir.exists()) {
       await for (final entity in dir.list(recursive: false)) {
         if (entity is File) {
-          final ext = entity.path.split('.').last.toLowerCase();
-          if (_supportedExtensions.contains(ext)) {
-            final thumbnail = await VideoThumbnailService.thumbnailFor(
-              entity.path,
-            );
-            if (thumbnail != null) return thumbnail;
-          }
+          if (!isSupportedVideoPath(entity.path)) continue;
+          final thumbnail = await VideoThumbnailService.thumbnailFor(
+            entity.path,
+          );
+          if (thumbnail != null) return thumbnail;
         }
       }
     }

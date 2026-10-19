@@ -39,7 +39,9 @@ class SettingsScreen extends StatelessWidget {
 
   /// 设置页的所有分组。
   ///
-  /// [weight] 是各分组高度的粗略估算，仅用于宽屏分栏时把分组均衡地分到各列。
+  /// [weight] 是各分组高度的粗略估算，仅用于宽屏分栏时把分组均衡地分到各列；
+  /// 分组也可用 [_SettingsGroup.preferredColumn] 固定到指定列（如下方的
+  /// 「文件与目录」钉在左栏，两列高度更接近）。
   List<_SettingsGroup> _sectionGroups(BuildContext context) {
     return [
       // 语言设置
@@ -59,6 +61,163 @@ class SettingsScreen extends StatelessWidget {
               ],
               settings.languageIndex,
               (value) => settings.setLanguageIndex(value),
+            ),
+          ),
+        ],
+      ),
+      // 视频显示设置
+      _SettingsGroup(
+        weight: 4,
+        preferredColumn: 0,
+        widgets: [
+          _buildSectionTitle(AppLocalizations.of(context).videoDisplay),
+          Consumer<SettingsProvider>(
+            builder: (context, settings, child) => Column(
+              children: [
+                _buildDropdownSetting(
+                  context,
+                  AppLocalizations.of(context).fitMode,
+                  [
+                    (
+                      AppLocalizations.of(context).contain,
+                      VideoFitMode.contain,
+                    ),
+                    (AppLocalizations.of(context).cover, VideoFitMode.cover),
+                    (
+                      AppLocalizations.of(context).original,
+                      VideoFitMode.original,
+                    ),
+                  ],
+                  settings.videoFitMode,
+                  (value) => settings.setVideoFitMode(value),
+                ),
+                _buildDropdownSetting(
+                  context,
+                  AppLocalizations.of(context).backgroundColorLabel,
+                  [
+                    (AppLocalizations.of(context).black, BackgroundColor.black),
+                    (
+                      AppLocalizations.of(context).darkGray,
+                      BackgroundColor.darkGray,
+                    ),
+                    (AppLocalizations.of(context).white, BackgroundColor.white),
+                  ],
+                  settings.backgroundColor,
+                  (value) => settings.setBackgroundColor(value),
+                ),
+                _buildDropdownSetting(
+                  context,
+                  AppLocalizations.of(context).orientationLabel,
+                  [
+                    (
+                      AppLocalizations.of(context).landscape,
+                      VideoOrientation.landscape,
+                    ),
+                    (
+                      AppLocalizations.of(context).portrait,
+                      VideoOrientation.portrait,
+                    ),
+                    (
+                      AppLocalizations.of(context).followSystem,
+                      VideoOrientation.followSystem,
+                    ),
+                    (
+                      AppLocalizations.of(context).followVideo,
+                      VideoOrientation.followVideo,
+                    ),
+                  ],
+                  settings.videoOrientation,
+                  (value) => settings.setVideoOrientation(value),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+      // 工具栏
+      _SettingsGroup(
+        weight: 6,
+        preferredColumn: 0,
+        widgets: [
+          _buildSectionTitle(AppLocalizations.of(context).windowFullscreen),
+          Consumer<SettingsProvider>(
+            builder: (context, settings, child) => Column(
+              children: [
+                _buildSwitchSetting(
+                  context,
+                  AppLocalizations.of(context).hideToolbarLabel,
+                  AppLocalizations.of(context).hideToolbarDesc,
+                  settings.hideToolbar,
+                  (value) => settings.setHideToolbar(value),
+                ),
+                _buildSliderSetting(
+                  context,
+                  AppLocalizations.of(context).hideDelay,
+                  '${settings.controlsHideDelay}${AppLocalizations.of(context).second}',
+                  settings.controlsHideDelay.toDouble(),
+                  1,
+                  15,
+                  1,
+                  (value) => settings.setControlsHideDelay(value.toInt()),
+                ),
+                _buildSwitchSetting(
+                  context,
+                  AppLocalizations.of(context).keepOnPause,
+                  AppLocalizations.of(context).keepOnPauseDesc,
+                  settings.keepControlsOnPause,
+                  (value) => settings.setKeepControlsOnPause(value),
+                ),
+                // 信息条是否显示；它的自动隐藏同样由上面的工具栏设置统一控制
+                _buildSwitchSetting(
+                  context,
+                  AppLocalizations.of(context).showVideoInfo,
+                  AppLocalizations.of(context).showVideoInfoDesc,
+                  settings.showVideoInfo,
+                  (value) => settings.setShowVideoInfo(value),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+      // 文件与目录相关（钉在左栏：该组较矮，放左栏可让两列高度更接近）
+      _SettingsGroup(
+        weight: 2,
+        preferredColumn: 0,
+        widgets: [
+          _buildSectionTitle(AppLocalizations.of(context).filesAndDirs),
+          Consumer<SettingsProvider>(
+            builder: (context, settings, child) => Column(
+              children: [
+                _buildSwitchSetting(
+                  context,
+                  AppLocalizations.of(context).recursiveScan,
+                  AppLocalizations.of(context).recursiveScanDesc,
+                  settings.recursiveScan,
+                  (value) => settings.setRecursiveScan(value),
+                ),
+                _buildDropdownSetting(
+                  context,
+                  AppLocalizations.of(context).fileListInfo,
+                  [
+                    (
+                      AppLocalizations.of(context).fileListInfoNone,
+                      FileListInfo.none,
+                    ),
+                    (
+                      AppLocalizations.of(context).fileListInfoName,
+                      FileListInfo.name,
+                    ),
+                    (
+                      AppLocalizations.of(context).fileListInfoNameDateSize,
+                      FileListInfo.nameDateSize,
+                    ),
+                  ],
+                  settings.fileListInfo,
+                  (value) => settings.setFileListInfo(value),
+                  subtitle: AppLocalizations.of(context).fileListInfoDesc,
+                ),
+              ],
             ),
           ),
         ],
@@ -129,74 +288,6 @@ class SettingsScreen extends StatelessWidget {
           ),
         ],
       ),
-      // 视频显示设置
-      _SettingsGroup(
-        weight: 4,
-        widgets: [
-          _buildSectionTitle(AppLocalizations.of(context).videoDisplay),
-          Consumer<SettingsProvider>(
-            builder: (context, settings, child) => Column(
-              children: [
-                _buildDropdownSetting(
-                  context,
-                  AppLocalizations.of(context).fitMode,
-                  [
-                    (
-                      AppLocalizations.of(context).contain,
-                      VideoFitMode.contain,
-                    ),
-                    (AppLocalizations.of(context).cover, VideoFitMode.cover),
-                    (
-                      AppLocalizations.of(context).original,
-                      VideoFitMode.original,
-                    ),
-                  ],
-                  settings.videoFitMode,
-                  (value) => settings.setVideoFitMode(value),
-                ),
-                _buildDropdownSetting(
-                  context,
-                  AppLocalizations.of(context).backgroundColorLabel,
-                  [
-                    (AppLocalizations.of(context).black, BackgroundColor.black),
-                    (
-                      AppLocalizations.of(context).darkGray,
-                      BackgroundColor.darkGray,
-                    ),
-                    (AppLocalizations.of(context).white, BackgroundColor.white),
-                  ],
-                  settings.backgroundColor,
-                  (value) => settings.setBackgroundColor(value),
-                ),
-                _buildDropdownSetting(
-                  context,
-                  AppLocalizations.of(context).orientationLabel,
-                  [
-                    (
-                      AppLocalizations.of(context).landscape,
-                      VideoOrientation.landscape,
-                    ),
-                    (
-                      AppLocalizations.of(context).portrait,
-                      VideoOrientation.portrait,
-                    ),
-                    (
-                      AppLocalizations.of(context).followSystem,
-                      VideoOrientation.followSystem,
-                    ),
-                    (
-                      AppLocalizations.of(context).followVideo,
-                      VideoOrientation.followVideo,
-                    ),
-                  ],
-                  settings.videoOrientation,
-                  (value) => settings.setVideoOrientation(value),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
       // 切换动画
       _SettingsGroup(
         weight: 3,
@@ -244,103 +335,10 @@ class SettingsScreen extends StatelessWidget {
           ),
         ],
       ),
-      // 工具栏
-      _SettingsGroup(
-        weight: 5,
-        widgets: [
-          _buildSectionTitle(AppLocalizations.of(context).windowFullscreen),
-          Consumer<SettingsProvider>(
-            builder: (context, settings, child) => Column(
-              children: [
-                _buildSwitchSetting(
-                  context,
-                  AppLocalizations.of(context).hideToolbarLabel,
-                  AppLocalizations.of(context).hideToolbarDesc,
-                  settings.hideToolbar,
-                  (value) => settings.setHideToolbar(value),
-                ),
-                _buildSliderSetting(
-                  context,
-                  AppLocalizations.of(context).hideDelay,
-                  '${settings.controlsHideDelay}${AppLocalizations.of(context).second}',
-                  settings.controlsHideDelay.toDouble(),
-                  1,
-                  15,
-                  1,
-                  (value) => settings.setControlsHideDelay(value.toInt()),
-                ),
-                _buildSwitchSetting(
-                  context,
-                  AppLocalizations.of(context).keepOnPause,
-                  AppLocalizations.of(context).keepOnPauseDesc,
-                  settings.keepControlsOnPause,
-                  (value) => settings.setKeepControlsOnPause(value),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-      // 文件与目录相关
-      _SettingsGroup(
-        weight: 2,
-        widgets: [
-          _buildSectionTitle(AppLocalizations.of(context).filesAndDirs),
-          Consumer<SettingsProvider>(
-            builder: (context, settings, child) => Column(
-              children: [
-                _buildSwitchSetting(
-                  context,
-                  AppLocalizations.of(context).recursiveScan,
-                  AppLocalizations.of(context).recursiveScanDesc,
-                  settings.recursiveScan,
-                  (value) => settings.setRecursiveScan(value),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-      // 信息显示设置
-      _SettingsGroup(
-        weight: 4,
-        widgets: [
-          _buildSectionTitle(AppLocalizations.of(context).infoDisplay),
-          Consumer<SettingsProvider>(
-            builder: (context, settings, child) => Column(
-              children: [
-                _buildSwitchSetting(
-                  context,
-                  AppLocalizations.of(context).showVideoInfo,
-                  AppLocalizations.of(context).showVideoInfoDesc,
-                  settings.showVideoInfo,
-                  (value) => settings.setShowVideoInfo(value),
-                ),
-                _buildSwitchSetting(
-                  context,
-                  AppLocalizations.of(context).infoAutoHideLabel,
-                  AppLocalizations.of(context).infoAutoHideDesc,
-                  settings.infoAutoHide,
-                  (value) => settings.setInfoAutoHide(value),
-                ),
-                _buildSliderSetting(
-                  context,
-                  AppLocalizations.of(context).infoHideDelay,
-                  '${settings.infoHideDelay}${AppLocalizations.of(context).second}',
-                  settings.infoHideDelay.toDouble(),
-                  1,
-                  15,
-                  1,
-                  (value) => settings.setInfoHideDelay(value.toInt()),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
       // 快捷键与控制
       _SettingsGroup(
         weight: 4,
+        preferredColumn: 1,
         widgets: [
           _buildSectionTitle(AppLocalizations.of(context).controlsLabel),
           Consumer<SettingsProvider>(
@@ -462,7 +460,9 @@ class SettingsScreen extends StatelessWidget {
 
   /// 把分组按估算高度均衡地分配到 [count] 列（保持原有顺序）。
   ///
-  /// 每次把下一个分组放入当前最矮的一列，尽量让各列高度接近。
+  /// 每次把下一个分组放入当前最矮的一列，尽量让各列高度接近；
+  /// 带 [_SettingsGroup.preferredColumn] 的分组固定放入指定列，
+  /// 用于把个别分组钉在某一列以进一步平衡两列高度。
   List<List<_SettingsGroup>> _distributeGroups(
     List<_SettingsGroup> groups,
     int count,
@@ -470,9 +470,15 @@ class SettingsScreen extends StatelessWidget {
     final columns = List.generate(count, (_) => <_SettingsGroup>[]);
     final heights = List.filled(count, 0);
     for (final group in groups) {
-      var target = 0;
-      for (var i = 1; i < count; i++) {
-        if (heights[i] < heights[target]) target = i;
+      final preferred = group.preferredColumn;
+      int target;
+      if (preferred != null && preferred >= 0 && preferred < count) {
+        target = preferred;
+      } else {
+        target = 0;
+        for (var i = 1; i < count; i++) {
+          if (heights[i] < heights[target]) target = i;
+        }
       }
       columns[target].add(group);
       heights[target] += group.weight;
@@ -762,11 +768,18 @@ class SettingsScreen extends StatelessWidget {
 
 /// 设置页中的一个分组（一个标题 + 若干选项控件）。
 class _SettingsGroup {
-  const _SettingsGroup({required this.widgets, required this.weight});
+  const _SettingsGroup({
+    required this.widgets,
+    required this.weight,
+    this.preferredColumn,
+  });
 
   /// 该分组包含的控件（标题与各选项）。
   final List<Widget> widgets;
 
   /// 分组高度的粗略估算，仅用于宽屏分栏时均衡各列高度。
   final int weight;
+
+  /// 宽屏分栏时固定放入的列下标（null 表示交给均分算法决定）。
+  final int? preferredColumn;
 }

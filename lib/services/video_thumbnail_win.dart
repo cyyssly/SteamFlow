@@ -7,17 +7,25 @@ import 'package:image/image.dart' as img;
 
 /// 视频首帧缩略图。
 ///
-/// [bytes] 为 PNG 编码后的字节，[width] / [height] 是真实帧尺寸
+/// [bytes] 为 PNG 编码后的字节，[width] / [height] 是**缩略图位图**的尺寸
 /// （不含任何裁剪或留黑边），可直接用于推导宽高比。
+///
+/// [sourceWidth] / [sourceHeight] 是视频的**真实分辨率**：缩略图会被等比
+/// 缩放到 512 以内，只能反映宽高比，不能反映真实像素，因此单独通过 Shell
+/// 属性读取；不可用时为 null。
 class VideoThumbnail {
   final Uint8List bytes;
   final int width;
   final int height;
+  final int? sourceWidth;
+  final int? sourceHeight;
 
   const VideoThumbnail({
     required this.bytes,
     required this.width,
     required this.height,
+    this.sourceWidth,
+    this.sourceHeight,
   });
 
   double get aspectRatio => height > 0 ? width / height : 1;
@@ -45,6 +53,51 @@ const int _iidData1 = 0xbcc18b79;
 const int _iidData2 = 0xba16;
 const int _iidData3 = 0x442f;
 const List<int> _iidData4 = [0x80, 0xc4, 0x8a, 0x59, 0xc3, 0x0c, 0x46, 0x3b];
+
+/// IPropertyStore 的 IID：{886d8eeb-8cf2-4446-8d02-cdba1dbdcf99}
+const int _iidPropStore1 = 0x886d8eeb;
+const int _iidPropStore2 = 0x8cf2;
+const int _iidPropStore3 = 0x4446;
+const List<int> _iidPropStore4 = [
+  0x8d,
+  0x02,
+  0xcd,
+  0xba,
+  0x1d,
+  0xbd,
+  0xcf,
+  0x99,
+];
+
+/// 视频属性集的 fmtid：{64440491-4c8b-11d1-8b70-080036b11a03}
+/// （小端字节序，直接写入 [_PropertyKey.fmtid]）
+///
+/// 即资源管理器「帧宽度 / 帧高度」两列所用的属性集，实测可拿到真实像素。
+const List<int> _pkeyVideoFmtid = [
+  0x91,
+  0x04,
+  0x44,
+  0x64,
+  0x8b,
+  0x4c,
+  0xd1,
+  0x11,
+  0x8b,
+  0x70,
+  0x08,
+  0x00,
+  0x36,
+  0xb1,
+  0x1a,
+  0x03,
+];
+
+/// 帧宽度 / 帧高度在该属性集中的 pid
+const int _pkeyVideoFrameWidthPid = 3;
+const int _pkeyVideoFrameHeightPid = 4;
+
+/// PROPVARIANT 的 `VT_UI4`
+const int _vtUi4 = 19;
 
 /// 生成单个视频的缩略图；失败（无缩略图/文件不存在）返回 null。
 VideoThumbnail? windowsVideoThumbnailSync(String path) {
@@ -175,10 +228,13 @@ VideoThumbnail? _extract(String path) {
       bytes: bgra.buffer,
       order: img.ChannelOrder.bgra,
     );
+    final frameSize = _queryFrameSize(path);
     return VideoThumbnail(
       bytes: Uint8List.fromList(img.encodePng(frame)),
       width: width,
       height: height,
+      sourceWidth: frameSize?.width,
+      sourceHeight: frameSize?.height,
     );
   } finally {
     if (hdc != nullptr) releaseDC(nullptr, hdc);
@@ -192,6 +248,100 @@ VideoThumbnail? _extract(String path) {
     calloc.free(bitmapHandlePtr);
     calloc.free(sizePtr);
     calloc.free(itemPtr);
+    calloc.free(iidPtr);
+    malloc.free(pathPtr);
+    if (ownsCom) coUninitialize();
+  }
+}
+
+/// 读取视频的真实分辨率（宽 × 高）；Shell 属性不可用时返回 null。
+///
+/// 走 Shell 属性存储中的「帧宽度 / 帧高度」属性（资源管理器同名两列的数据源），
+/// 它们是视频的**原始像素尺寸**，不受缩略图缩放影响。
+/// 部分容器/未索引的文件可能取不到，此时返回 null，由调用方显示「未知」。
+({int width, int height})? _queryFrameSize(String path) {
+  final shell32 = DynamicLibrary.open('shell32.dll');
+  final ole32 = DynamicLibrary.open('ole32.dll');
+
+  final coInitializeEx = ole32
+      .lookupFunction<_CoInitializeExNative, _CoInitializeExDart>(
+        'CoInitializeEx',
+      );
+  final coUninitialize = ole32
+      .lookupFunction<_CoUninitializeNative, _CoUninitializeDart>(
+        'CoUninitialize',
+      );
+  final getPropertyStore = shell32
+      .lookupFunction<_ShGetPropertyStoreNative, _ShGetPropertyStoreDart>(
+        'SHGetPropertyStoreFromParsingName',
+      );
+
+  final initResult = coInitializeEx(nullptr, _coinitApartmentThreaded);
+  final ownsCom = initResult == 0; // S_OK
+
+  final pathPtr = path.toNativeUtf16();
+  final iidPtr = calloc<_Guid>();
+  final storePtr = calloc<Pointer<Void>>();
+  final keyPtr = calloc<_PropertyKey>();
+  final variantPtr = calloc<_PropVariant>();
+
+  Pointer<Void> store = nullptr;
+  try {
+    iidPtr.ref.data1 = _iidPropStore1;
+    iidPtr.ref.data2 = _iidPropStore2;
+    iidPtr.ref.data3 = _iidPropStore3;
+    for (var i = 0; i < _iidPropStore4.length; i++) {
+      iidPtr.ref.data4[i] = _iidPropStore4[i];
+    }
+    // GPS_DEFAULT = 0
+    if (getPropertyStore(pathPtr, nullptr, 0, iidPtr, storePtr) != 0) {
+      return null;
+    }
+    store = storePtr.value;
+    if (store == nullptr) return null;
+
+    // System.Video.FrameWidth / FrameHeight 共用同一个 fmtid，仅 pid 不同
+    for (var i = 0; i < _pkeyVideoFmtid.length; i++) {
+      keyPtr.ref.fmtid[i] = _pkeyVideoFmtid[i];
+    }
+
+    final getValue = _comSlot<_GetValueNative>(
+      store,
+      5,
+    ).asFunction<_GetValueDart>();
+
+    keyPtr.ref.pid = _pkeyVideoFrameWidthPid;
+    if (getValue(store, keyPtr, variantPtr) != 0 ||
+        variantPtr.ref.vt != _vtUi4) {
+      return null;
+    }
+    final width = variantPtr.ref.uintValue;
+
+    // 复用同一个 PROPVARIANT，读第二个属性前先清空
+    variantPtr.ref
+      ..vt = 0
+      ..reserved1 = 0
+      ..reserved2 = 0
+      ..reserved3 = 0
+      ..uintValue = 0
+      ..padding = 0;
+
+    keyPtr.ref.pid = _pkeyVideoFrameHeightPid;
+    if (getValue(store, keyPtr, variantPtr) != 0 ||
+        variantPtr.ref.vt != _vtUi4) {
+      return null;
+    }
+    final height = variantPtr.ref.uintValue;
+
+    if (width <= 0 || height <= 0) return null;
+    return (width: width, height: height);
+  } finally {
+    if (store != nullptr) {
+      _comSlot<_ReleaseNative>(store, 2).asFunction<_ReleaseDart>()(store);
+    }
+    calloc.free(variantPtr);
+    calloc.free(keyPtr);
+    calloc.free(storePtr);
     calloc.free(iidPtr);
     malloc.free(pathPtr);
     if (ownsCom) coUninitialize();
@@ -368,3 +518,57 @@ final class _BitmapInfo extends Struct {
   @Uint32()
   external int bmiColors;
 }
+
+/// `PROPERTYKEY`：GUID（16 字节）+ DWORD pid。
+final class _PropertyKey extends Struct {
+  @Array(16)
+  external Array<Uint8> fmtid;
+
+  @Uint32()
+  external int pid;
+}
+
+/// `PROPVARIANT`（16 字节）：8 字节头部 + 8 字节联合体。
+///
+/// 只用到 `VT_UI4`，其值位于联合体起始的 4 字节（即偏移 8）。
+final class _PropVariant extends Struct {
+  @Uint16()
+  external int vt;
+
+  @Uint16()
+  external int reserved1;
+
+  @Uint16()
+  external int reserved2;
+
+  @Uint16()
+  external int reserved3;
+
+  @Uint32()
+  external int uintValue;
+
+  @Uint32()
+  external int padding;
+}
+
+typedef _ShGetPropertyStoreNative =
+    Int32 Function(
+      Pointer<Utf16>,
+      Pointer<Void>,
+      Int32,
+      Pointer<_Guid>,
+      Pointer<Pointer<Void>>,
+    );
+typedef _ShGetPropertyStoreDart =
+    int Function(
+      Pointer<Utf16>,
+      Pointer<Void>,
+      int,
+      Pointer<_Guid>,
+      Pointer<Pointer<Void>>,
+    );
+
+typedef _GetValueNative =
+    Int32 Function(Pointer<Void>, Pointer<_PropertyKey>, Pointer<_PropVariant>);
+typedef _GetValueDart =
+    int Function(Pointer<Void>, Pointer<_PropertyKey>, Pointer<_PropVariant>);
