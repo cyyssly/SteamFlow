@@ -1,7 +1,7 @@
 name: steam_flow
 description: "A cross-platform video player and slideshow application."
 publish_to: 'none'
-version: 1.1.0+2
+version: 1.2.0+3
 
 environment:
   sdk: ^3.12.2
@@ -16,7 +16,9 @@ dependencies:
   # 修复了 Windows 上主线程 CoUninitialize 导致的原生崩溃（comdlg32.dll 0xc0000005）。
   # 注意：10.1.1+ 起 Android 实现迁移到 Kotlin，与 AGP 9 存在兼容问题，暂不升级到 10.x。
   file_picker: ^9.0.3
-  shared_preferences: ^2.2.2
+  # 固定版本：2.5.6 起依赖的 shared_preferences_android 2.5.1 迁移到 JNI，
+  # 在 Flutter 3.44.8 的 release 包中启动即报 NoSuchMethodError（表现为白屏）。
+  shared_preferences: 2.5.5
   provider: ^6.1.1
   image: ^4.1.7
   url_launcher: ^6.2.4
@@ -26,6 +28,11 @@ dependencies:
   media_kit: ^1.2.6
   media_kit_video: ^2.0.1
   media_kit_libs_video: ^1.0.7
+  # 共享源封面缩略图的磁盘缓存目录
+  path_provider: ^2.1.5
+  # 桌面端关闭窗口后收起到系统托盘，保持共享服务继续运行
+  tray_manager: ^0.5.3
+  window_manager: ^0.5.2
 
 dev_dependencies:
   flutter_test:
@@ -39,6 +46,9 @@ dev_dependencies:
 # pub.dev。因此这里用 dependency_overrides 精确指向该提交；
 # 等上游正式发版后，删掉本段、把版本约束升到对应版本即可。
 dependency_overrides:
+  # 强制 Android 实现停留在 JNI 迁移前的版本：2.5.1 在当前 Flutter 版本下
+  # 启动读取设置时会抛 NoSuchMethodError，导致 release 包白屏。
+  shared_preferences_android: 2.4.27
   media_kit:
     git:
       url: https://github.com/media-kit/media-kit.git

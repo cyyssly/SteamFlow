@@ -251,6 +251,14 @@ class SettingsScreen extends StatelessWidget {
                       AppLocalizations.of(context).oldestFirst,
                       PlayOrder.oldestFirst,
                     ),
+                    (
+                      AppLocalizations.of(context).largestFirst,
+                      PlayOrder.sizeLargest,
+                    ),
+                    (
+                      AppLocalizations.of(context).smallestFirst,
+                      PlayOrder.sizeSmallest,
+                    ),
                     (AppLocalizations.of(context).randomPlay, PlayOrder.random),
                     (
                       AppLocalizations.of(context).newPreferred,

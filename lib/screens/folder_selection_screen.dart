@@ -1,17 +1,24 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:steam_flow/providers/slide_provider.dart';
 import 'package:steam_flow/providers/settings_provider.dart';
+import 'package:steam_flow/providers/lan_provider.dart';
+import 'package:steam_flow/models/lan_models.dart';
 import 'package:steam_flow/models/video_item.dart';
 import 'package:steam_flow/screens/excluded_videos_screen.dart';
 import 'package:steam_flow/screens/folder_videos_screen.dart';
+import 'package:steam_flow/screens/remote_browser_screen.dart';
+import 'package:steam_flow/screens/remote_videos_screen.dart';
 import 'package:steam_flow/services/directory_picker_service.dart';
 import 'package:steam_flow/services/media_store_service.dart';
 import 'package:steam_flow/services/video_formats.dart';
+import 'package:steam_flow/services/video_scan_service.dart';
 import 'package:steam_flow/services/video_thumbnail_service.dart';
 import 'package:steam_flow/l10n/app_localizations.dart';
+import 'package:steam_flow/main.dart';
 
 class FolderSelectionScreen extends StatefulWidget {
   const FolderSelectionScreen({super.key});
@@ -20,7 +27,8 @@ class FolderSelectionScreen extends StatefulWidget {
   State<FolderSelectionScreen> createState() => _FolderSelectionScreenState();
 }
 
-class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
+class _FolderSelectionScreenState extends State<FolderSelectionScreen>
+    with RouteAware {
   bool _isScanning = false;
 
   // 缓存每个文件夹的统计信息
@@ -31,31 +39,20 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
   /// 正在为该文件夹准备播放（扫描中），用于禁用其播放按钮并显示进度
   final Set<String> _playingFolders = {};
 
+  /// 正在准备的共享文件夹（键），用于禁用播放按钮并显示进度
+  final Set<String> _playingShared = {};
+
+  /// 正在重连的共享文件夹（键），用于禁用重连按钮并显示进度
+  final Set<String> _reconnectingShared = {};
+
   /// 是否正在添加文件夹（含原生对话框弹出期间），用于防止重复触发
   bool _isAddingFolder = false;
 
-  /// “已排除的文件”虚拟条目的 Key（列表整体位移时需要它才能重新定位）
-  static const Key _excludedEntryKey = ValueKey('excluded-entry');
+  /// 是否正在添加共享源（含设备选择/手动输入期间），用于防止重复触发
+  bool _isAddingShareSource = false;
 
-  /// 列表项的 Key -> 当前索引。
-  ///
-  /// 供 ListView 在“添加/删除文件夹”后把已有的 Element（及其缩略图 State）
-  /// 重新绑定到正确的位置，避免按位置复用导致缩略图错乱。
-  int? _resolveItemIndex(Key key, List<String> folderPaths, bool hasExcluded) {
-    if (key == _excludedEntryKey) {
-      return hasExcluded ? 0 : null;
-    }
-    if (key is ValueKey<String>) {
-      final value = key.value;
-      if (value.startsWith('folder-')) {
-        final path = value.substring('folder-'.length);
-        final index = folderPaths.indexOf(path);
-        if (index < 0) return null;
-        return hasExcluded ? index + 1 : index;
-      }
-    }
-    return null;
-  }
+  /// “已排除的文件”分组的 Key 前缀
+  static const String _excludedGroupKeyPrefix = 'excluded-group-';
 
   Future<void> _addFolder() async {
     // 防止重复触发（例如快速双击“添加文件夹”按钮）并发打开原生对话框。
@@ -232,6 +229,154 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
     }
   }
 
+  /// 打开“添加共享源”：先选择设备，再进入该设备的共享文件夹列表勾选
+  Future<void> _addShareSource() async {
+    if (_isAddingShareSource) return;
+    _isAddingShareSource = true;
+    try {
+      final lan = Provider.of<LanProvider>(context, listen: false);
+      await lan.refresh();
+      if (!mounted) return;
+
+      final pick = await showDialog<_ShareSourcePick>(
+        context: context,
+        builder: (dialogContext) {
+          final loc = AppLocalizations.of(dialogContext);
+          return AlertDialog(
+            backgroundColor: const Color(0xFF16213e),
+            title: Text(
+              loc.addShareSource,
+              style: const TextStyle(fontSize: 18),
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              height: MediaQuery.of(dialogContext).size.height * 0.6,
+              child: Consumer<LanProvider>(
+                builder: (context, lan, _) => ListView(
+                  children: [
+                    ListTile(
+                      leading: const Icon(Icons.add_link),
+                      title: Text(loc.lanManualAdd),
+                      subtitle: Text(loc.lanManualHint),
+                      onTap: () => Navigator.pop(
+                        dialogContext,
+                        const _ShareSourcePick(null),
+                      ),
+                    ),
+                    const Divider(height: 1),
+                    if (lan.devices.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 32),
+                        child: Center(
+                          child: Text(
+                            loc.lanNoDevices,
+                            style: const TextStyle(color: Colors.grey),
+                          ),
+                        ),
+                      )
+                    else
+                      for (final device in lan.devices)
+                        ListTile(
+                          leading: const Icon(
+                            Icons.devices,
+                            color: Color(0xFF00b894),
+                          ),
+                          title: Text(device.name),
+                          subtitle: Text(
+                            '${device.address} · '
+                            '${loc.lanSharedFoldersCount(device.folderCount)}',
+                          ),
+                          onTap: () => Navigator.pop(
+                            dialogContext,
+                            _ShareSourcePick(device),
+                          ),
+                        ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: Text(
+                  AppLocalizations.of(dialogContext).lanCancel,
+                  style: const TextStyle(color: Colors.white70),
+                ),
+              ),
+            ],
+          );
+        },
+      );
+      if (pick == null || !mounted) return;
+
+      var device = pick.device;
+      if (device == null) {
+        final input = await _promptManualAddress();
+        if (input == null || !mounted) return;
+        device = await lan.addManualDevice(input);
+        if (device == null) {
+          if (!mounted) return;
+          final loc = AppLocalizations.of(context);
+          _showSnack(
+            lan.error == LanError.selfDevice
+                ? loc.lanSelfDevice
+                : loc.lanInvalidAddress,
+          );
+          return;
+        }
+      }
+
+      if (!mounted) return;
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) =>
+              RemoteBrowserScreen(device: device!, selectMode: true),
+        ),
+      );
+    } finally {
+      _isAddingShareSource = false;
+    }
+  }
+
+  Future<String?> _promptManualAddress() async {
+    final loc = AppLocalizations.of(context);
+    final controller = TextEditingController();
+    final input = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xFF16213e),
+        title: Text(loc.lanManualAdd),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: InputDecoration(hintText: loc.lanManualHint),
+          onSubmitted: (value) => Navigator.pop(dialogContext, value),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: Text(loc.lanCancel),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, controller.text),
+            child: Text(loc.lanAdd),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (input == null || input.trim().isEmpty) return null;
+    return input;
+  }
+
+  void _showSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: Colors.red),
+    );
+  }
+
   /// 计算文件夹中的视频数量和子文件夹数量
   Future<void> _countFolderVideos(String folderPath) async {
     if (_scanningFolders.contains(folderPath)) return;
@@ -400,84 +545,566 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
     }
   }
 
-  /// 全部排除：把已选文件夹全部移出播放列表
-  void _excludeAll() {
-    final slideProvider = Provider.of<SlideProvider>(context, listen: false);
-    final settingsProvider = Provider.of<SettingsProvider>(
-      context,
-      listen: false,
-    );
-    slideProvider.clearFolderPaths();
-    settingsProvider.setLastFolderPaths(slideProvider.folderPaths);
-
-    // 清除所有缓存的统计信息
-    setState(() {
-      _folderStats.clear();
-      _scanningFolders.clear();
-    });
-  }
-
-  /// 构建"已排除的文件"虚拟文件夹条目
-  Widget _buildExcludedFolderTile() {
+  /// 直接播放某个共享文件夹：范围限定为该远端文件夹
+  Future<void> _playSharedFolder(SharedFolderRef ref) async {
+    if (_playingShared.contains(ref.key)) return;
+    final lan = Provider.of<LanProvider>(context, listen: false);
     final settings = Provider.of<SettingsProvider>(context, listen: false);
-    final excludedCount = settings.excludedPaths.length;
-    final loc = AppLocalizations.of(context);
-    // 找第一个仍然存在的已排除视频作为缩略图
-    String? firstExcludedPath;
-    for (final path in settings.excludedPaths) {
-      if (File(path).existsSync()) {
-        firstExcludedPath = path;
-        break;
+    final slide = Provider.of<SlideProvider>(context, listen: false);
+
+    setState(() => _playingShared.add(ref.key));
+    try {
+      final videos = await lan.loadSharedFolderVideos(ref);
+      if (!mounted) return;
+      if (videos == null || videos.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(AppLocalizations.of(context).lanLoadFailed),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+      slide.setVideos(videos, playOrder: settings.playOrder);
+      slide.sortByPlayOrder(settings.playOrder);
+      slide.goToVideo(0);
+      slide.startPlay();
+      if (mounted) Navigator.pushNamed(context, '/player');
+    } finally {
+      if (mounted) {
+        setState(() => _playingShared.remove(ref.key));
       }
     }
-    return ListTile(
-      key: const ValueKey('excluded-vfolder'),
-      // 右侧边距缩小，让 > 图标更靠右，与左侧缩略图边距更平衡
-      contentPadding: const EdgeInsets.only(left: 16, right: 4),
-      leading: ClipRRect(
-        borderRadius: BorderRadius.circular(6),
-        child: SizedBox(
-          width: 40,
-          height: 40,
-          child: firstExcludedPath != null
-              ? _ThumbnailVideo(
-                  key: ValueKey('thumb-excluded-$firstExcludedPath'),
-                  thumbnailPath: firstExcludedPath,
-                  albumPath: firstExcludedPath,
-                )
-              : Container(
-                  color: const Color(0xFF1a1a2e),
-                  child: const Icon(
-                    Icons.inbox,
-                    color: Colors.orange,
-                    size: 24,
-                  ),
+  }
+
+  /// 重新连接共享源（离线时点击条目或“重新连接全部”）
+  Future<void> _reconnectShared(List<SharedFolderRef> refs) async {
+    if (refs.isEmpty) return;
+    final lan = Provider.of<LanProvider>(context, listen: false);
+    setState(() {
+      for (final ref in refs) {
+        _reconnectingShared.add(ref.key);
+      }
+    });
+    try {
+      await lan.probeSharedDevices(refs);
+      if (!mounted) return;
+      await lan.refreshSharedFolders(refs);
+      if (!mounted) return;
+      await lan.loadSharedFolderCovers(refs);
+    } finally {
+      if (mounted) {
+        setState(() {
+          for (final ref in refs) {
+            _reconnectingShared.remove(ref.key);
+          }
+        });
+      }
+    }
+  }
+
+  /// 播放全部本地文件夹
+  Future<void> _playLocalSection() async {
+    if (_isScanning) return;
+    final slide = Provider.of<SlideProvider>(context, listen: false);
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
+    if (slide.folderPaths.isEmpty) return;
+
+    setState(() => _isScanning = true);
+    try {
+      final unique = <String, VideoItem>{};
+      for (final path in slide.folderPaths) {
+        final videos = await _scanFolder(path, settings);
+        for (final video in videos) {
+          unique.putIfAbsent(video.key, () => video);
+        }
+      }
+      if (!mounted) return;
+      if (unique.isEmpty) {
+        _showSnack(AppLocalizations.of(context).msgNoVideos);
+        return;
+      }
+      final videos = unique.values.toList()
+        ..sort((a, b) => a.name.compareTo(b.name));
+      slide.setVideos(videos, playOrder: settings.playOrder);
+      slide.sortByPlayOrder(settings.playOrder);
+      slide.goToVideo(0);
+      slide.startPlay();
+      Navigator.pushNamed(context, '/player');
+    } finally {
+      if (mounted) setState(() => _isScanning = false);
+    }
+  }
+
+  /// 播放全部共享文件夹（离线设备自动跳过）
+  Future<void> _playSharedSection() async {
+    if (_isScanning) return;
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
+    final lan = Provider.of<LanProvider>(context, listen: false);
+    final slide = Provider.of<SlideProvider>(context, listen: false);
+    final refs = settings.sharedFolders;
+    if (refs.isEmpty) return;
+
+    setState(() => _isScanning = true);
+    try {
+      final unique = <String, VideoItem>{};
+      for (final ref in refs) {
+        if (!lan.isDeviceReachable(ref.deviceId)) continue;
+        final videos = await lan.loadSharedFolderVideos(ref);
+        if (videos == null) continue;
+        for (final video in videos) {
+          unique.putIfAbsent(video.key, () => video);
+        }
+      }
+      if (!mounted) return;
+      if (unique.isEmpty) {
+        _showSnack(AppLocalizations.of(context).lanLoadFailed);
+        return;
+      }
+      final videos = unique.values.toList()
+        ..sort((a, b) => a.name.compareTo(b.name));
+      slide.setVideos(videos, playOrder: settings.playOrder);
+      slide.sortByPlayOrder(settings.playOrder);
+      slide.goToVideo(0);
+      slide.startPlay();
+      Navigator.pushNamed(context, '/player');
+    } finally {
+      if (mounted) setState(() => _isScanning = false);
+    }
+  }
+
+  /// 统一的文件夹条目布局：固定 88dp 行高 + 内容垂直居中。
+  ///
+  /// [ListTile] 的标题/副标题按 Material 三行规格从顶部固定偏移排版，
+  /// 内容不足三行时会明显偏上；这里改用 Row 自行布局，保证缩略图、
+  /// 文本块与操作按钮始终在行内居中，三类条目的高度与对齐完全一致。
+  Widget _folderRow({
+    required Key key,
+    required Widget leading,
+    required String title,
+    required Widget subtitle,
+    required List<Widget> actions,
+    Color? titleColor,
+    VoidCallback? onTap,
+  }) {
+    return SizedBox(
+      key: key,
+      height: 88,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: EdgeInsets.only(
+            left: Platform.isAndroid ? 8 : 16,
+            right: Platform.isAndroid ? 0 : 4,
+          ),
+          child: Row(
+            children: [
+              leading,
+              SizedBox(width: Platform.isAndroid ? 8 : 16),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(fontSize: 14, color: titleColor),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    subtitle,
+                  ],
                 ),
+              ),
+              ...actions,
+            ],
+          ),
         ),
       ),
-      title: Text(
-        loc.excludeFolderVirtual,
-        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+    );
+  }
+
+  /// 行内操作按钮：移动端压缩内边距与占位宽度，桌面端保持默认尺寸
+  Widget _actionButton({
+    required String tooltip,
+    required Widget icon,
+    required VoidCallback? onPressed,
+  }) {
+    final compact = Platform.isAndroid;
+    return IconButton(
+      visualDensity: VisualDensity.compact,
+      padding: compact ? EdgeInsets.zero : null,
+      constraints: compact
+          ? const BoxConstraints.tightFor(width: 36, height: 40)
+          : null,
+      tooltip: tooltip,
+      icon: icon,
+      onPressed: onPressed,
+    );
+  }
+
+  /// 分区标题：默认标题靠左、动作靠右；[actionsInline] 时标题与动作紧挨排列
+  Widget _buildSectionHeader({
+    required String title,
+    required List<Widget> actions,
+    bool actionsInline = false,
+  }) {
+    final titleWidget = Text(
+      title,
+      style: const TextStyle(
+        fontSize: 13,
+        fontWeight: FontWeight.bold,
+        color: Colors.grey,
       ),
-      subtitle: Text(
-        excludedCount > 0
-            ? loc.includesVideos(excludedCount)
-            : loc.noExcludedVideos,
-        style: const TextStyle(fontSize: 12, color: Colors.grey),
+    );
+    return Padding(
+      padding: EdgeInsets.fromLTRB(4, 8, Platform.isAndroid ? 0 : 4, 0),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(minHeight: Platform.isAndroid ? 40 : 48),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            if (actionsInline) ...[
+              titleWidget,
+              ...actions,
+            ] else ...[
+              Expanded(child: titleWidget),
+              ...actions,
+            ],
+          ],
+        ),
       ),
-      // 用与 IconButton 相同尺寸的容器包裹，保证与下方删除按钮竖向对齐
-      trailing: const SizedBox(
-        width: 48,
-        height: 48,
-        child: Icon(Icons.chevron_right, color: Colors.grey),
+    );
+  }
+
+  /// 本机已选文件夹条目
+  Widget _buildLocalFolderTile(String path) {
+    final loc = AppLocalizations.of(context);
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
+    final lan = Provider.of<LanProvider>(context, listen: false);
+    final ip = lan.localAddresses.isNotEmpty
+        ? lan.localAddresses.first
+        : '127.0.0.1';
+    return _folderRow(
+      // 使用稳定的 Key 绑定到文件夹路径，避免 ListView 按位置复用 State，
+      // 导致缩略图组件残留上一个位置的视频
+      key: ValueKey('folder-$path'),
+      leading: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: SizedBox(
+          width: 56,
+          height: 56,
+          child: _ThumbnailVideo(
+            // 排除列表变化时重建，避免沿用排除前缓存的封面
+            key: ValueKey('thumb-$path-${settings.excludedPaths.length}'),
+            thumbnailPath: null,
+            albumPath: path,
+          ),
+        ),
       ),
+      title: Platform.isAndroid ? _getLastPathSegment(path) : path,
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildFolderStats(path),
+          const SizedBox(height: 2),
+          Text(
+            '${settings.deviceName} · $ip',
+            style: const TextStyle(fontSize: 11, color: Colors.grey),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+      actions: [
+        _actionButton(
+          tooltip: loc.playFolder,
+          icon: _playingFolders.contains(path)
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.play_circle_outline, color: Colors.green),
+          onPressed: _playingFolders.contains(path)
+              ? null
+              : () => _playFolder(path),
+        ),
+        _actionButton(
+          tooltip: loc.removeFromManage,
+          icon: const Icon(Icons.remove_circle_outline, color: Colors.orange),
+          onPressed: () => _removeFolder(path),
+        ),
+      ],
       onTap: () {
         Navigator.push(
           context,
-          MaterialPageRoute(builder: (context) => const ExcludedVideosScreen()),
+          MaterialPageRoute(
+            builder: (context) => FolderVideosScreen(folderPath: path),
+          ),
         );
       },
     );
+  }
+
+  /// 共享文件夹无封面或离线时显示的文件夹图标
+  Widget _sharedFolderIcon(bool online) {
+    return Icon(
+      Icons.folder_shared,
+      size: 30,
+      color: online ? const Color(0xFF00b894) : Colors.grey,
+    );
+  }
+
+  /// 共享文件夹条目：离线时整体灰显，仅显示重连与移除
+  Widget _buildSharedFolderTile(SharedFolderRef ref, LanProvider lan) {
+    final loc = AppLocalizations.of(context);
+    final online = lan.isDeviceReachable(ref.deviceId);
+    final device = lan.deviceById(ref.deviceId);
+    final deviceName = device?.name ?? ref.deviceName;
+    final address = device?.address ?? ref.address;
+    final coverFile = lan.coverFileFor(ref.key);
+    final coverUrl = lan.coverUrlFor(ref.key);
+    return _folderRow(
+      key: ValueKey('shared-${ref.key}'),
+      leading: SizedBox(
+        width: 56,
+        height: 56,
+        child: coverFile != null
+            ? ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.file(
+                  File(coverFile),
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => _sharedFolderIcon(online),
+                ),
+              )
+            : coverUrl == null || coverUrl.isEmpty
+            ? _sharedFolderIcon(online)
+            : ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.network(
+                  coverUrl,
+                  fit: BoxFit.cover,
+                  frameBuilder: (context, child, frame, loaded) {
+                    if (loaded || frame != null) return child;
+                    return _sharedFolderIcon(online);
+                  },
+                  errorBuilder: (_, _, _) => _sharedFolderIcon(online),
+                ),
+              ),
+      ),
+      title: ref.folderName,
+      titleColor: online ? Colors.white : Colors.grey,
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            loc.lanVideoCount(ref.videoCount),
+            style: const TextStyle(fontSize: 12, color: Colors.grey),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 2),
+          Text(
+            '$deviceName · $address',
+            style: const TextStyle(fontSize: 11, color: Colors.grey),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+      actions: [
+        if (!online)
+          _actionButton(
+            tooltip: loc.lanReconnectFolder,
+            icon: _reconnectingShared.contains(ref.key)
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.refresh),
+            onPressed: _reconnectingShared.contains(ref.key)
+                ? null
+                : () => _reconnectShared([ref]),
+          ),
+        if (online)
+          _actionButton(
+            tooltip: loc.playFolder,
+            icon: _playingShared.contains(ref.key)
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.play_circle_outline, color: Colors.green),
+            onPressed: _playingShared.contains(ref.key)
+                ? null
+                : () => _playSharedFolder(ref),
+          ),
+        _actionButton(
+          tooltip: loc.removeFromManage,
+          icon: const Icon(Icons.remove_circle_outline, color: Colors.orange),
+          onPressed: () => Provider.of<SettingsProvider>(
+            context,
+            listen: false,
+          ).removeSharedFolder(ref.key),
+        ),
+      ],
+      onTap: () {
+        if (!online) {
+          _reconnectShared([ref]);
+          return;
+        }
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => RemoteVideosScreen(
+              device: lan.resolveDevice(ref),
+              folderId: ref.folderId,
+              folderName: ref.folderName,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// 构建“已排除文件”分组：按所在文件夹聚合，每个文件夹一行
+  List<_ExcludedGroup> _buildExcludedGroups(SettingsProvider settings) {
+    // 按父目录归组，并忽略应用外已被移走的文件
+    final groups = <String, List<String>>{};
+    final seen = <String>{};
+    for (final path in settings.excludedPaths) {
+      if (!File(path).existsSync()) continue;
+      // 同一视频可能因历史数据被重复记录，只统计一次
+      if (!seen.add(path)) continue;
+      final parent = _normalizeFolderPath(File(path).parent.path);
+      // 手机端只按最后一级目录名归组：同名目录即使路径不同也视为同一目录，
+      // 避免出现两行同名但内容不同的分组
+      final key = Platform.isAndroid ? _getLastPathSegment(parent) : parent;
+      groups.putIfAbsent(key, () => []).add(path);
+    }
+    final entries = groups.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    return [
+      for (final entry in entries) _ExcludedGroup(entry.key, entry.value),
+    ];
+  }
+
+  /// 规范化目录路径，避免同一目录因末尾分隔符差异被拆成两组
+  String _normalizeFolderPath(String path) {
+    if (path.isEmpty) return path;
+    var clean = path;
+    while (clean.length > 1 && (clean.endsWith('/') || clean.endsWith('\\'))) {
+      clean = clean.substring(0, clean.length - 1);
+    }
+    return clean;
+  }
+
+  /// “已排除文件”分区标题（右侧提供恢复全部）
+  Widget _buildExcludedHeader(List<_ExcludedGroup> groups) {
+    final loc = AppLocalizations.of(context);
+    final allPaths = [for (final group in groups) ...group.paths];
+    return KeyedSubtree(
+      key: const ValueKey('excluded-header'),
+      child: _buildSectionHeader(
+        title: loc.excludeFolderVirtual,
+        actionsInline: true,
+        actions: [
+          _actionButton(
+            tooltip: loc.restoreAll,
+            icon: const Icon(Icons.restore, color: Colors.orange),
+            onPressed: () => _restoreExcludedGroup(allPaths),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 单个文件夹的已排除文件条目
+  ///
+  /// [group.name] 即界面显示的分组名称（手机端为目录名，桌面端为完整路径）。
+  Widget _buildExcludedGroupTile(_ExcludedGroup group) {
+    final loc = AppLocalizations.of(context);
+    final firstPath = group.paths.first;
+    return _folderRow(
+      key: ValueKey('$_excludedGroupKeyPrefix${group.name}'),
+      leading: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: SizedBox(
+          width: 56,
+          height: 56,
+          child: _ThumbnailVideo(
+            key: ValueKey('thumb-excluded-$firstPath'),
+            thumbnailPath: firstPath,
+            albumPath: firstPath,
+          ),
+        ),
+      ),
+      title: group.name,
+      subtitle: Text(
+        loc.filesCount(group.paths.length),
+        style: const TextStyle(fontSize: 12, color: Colors.grey),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      actions: [
+        _actionButton(
+          tooltip: loc.restoreFiles,
+          icon: const Icon(Icons.restore, color: Colors.orange),
+          onPressed: () => _restoreExcludedGroup(group.paths),
+        ),
+        _actionButton(
+          tooltip: loc.deleteFiles,
+          icon: const Icon(Icons.delete_outline, color: Colors.red),
+          onPressed: () => _deleteExcludedGroup(group.paths),
+        ),
+      ],
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => ExcludedVideosScreen(
+              folderName: group.name,
+              paths: group.paths,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// 恢复某个文件夹下全部已排除视频
+  void _restoreExcludedGroup(List<String> paths) {
+    Provider.of<SettingsProvider>(
+      context,
+      listen: false,
+    ).removeExcludedPaths(paths);
+  }
+
+  /// 删除某个文件夹下全部已排除视频（移入回收站）
+  Future<void> _deleteExcludedGroup(List<String> paths) async {
+    final loc = AppLocalizations.of(context);
+    final ok = await MediaStoreService.deleteToTrash(paths);
+    if (!mounted) return;
+    if (!ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(loc.deleteFailed), backgroundColor: Colors.red),
+      );
+      return;
+    }
+    Provider.of<SettingsProvider>(
+      context,
+      listen: false,
+    ).removeExcludedPaths(paths);
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(loc.deletedAllToTrash)));
   }
 
   Future<void> _scanVideos() async {
@@ -486,8 +1113,10 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
       context,
       listen: false,
     );
+    final lanProvider = Provider.of<LanProvider>(context, listen: false);
+    final sharedRefs = settingsProvider.sharedFolders;
 
-    if (slideProvider.folderPaths.isEmpty) {
+    if (slideProvider.folderPaths.isEmpty && sharedRefs.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(AppLocalizations.of(context).msgAddFolderFirst),
@@ -503,17 +1132,15 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
     });
 
     try {
-      // 使用 Map 进行去重
+      // 使用 Map 进行去重（本机用路径、远端用设备+文件夹+相对路径）
       final uniqueVideos = <String, VideoItem>{};
       bool hasStartedPlaying = false;
       int lastUpdateCount = 0;
 
-      // 逐个扫描文件夹
-      for (final folderPath in slideProvider.folderPaths) {
-        final videos = await _scanFolder(folderPath, settingsProvider);
+      Future<void> collect(List<VideoItem> videos) async {
         for (final video in videos) {
-          if (!uniqueVideos.containsKey(video.path)) {
-            uniqueVideos[video.path] = video;
+          if (!uniqueVideos.containsKey(video.key)) {
+            uniqueVideos[video.key] = video;
           }
 
           // 每收集到10个新视频就更新一次列表（播放中）
@@ -536,6 +1163,19 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
           hasStartedPlaying = true;
           lastUpdateCount = uniqueVideos.length;
         }
+      }
+
+      // 逐个扫描本机文件夹
+      for (final folderPath in slideProvider.folderPaths) {
+        final videos = await _scanFolder(folderPath, settingsProvider);
+        await collect(videos);
+      }
+
+      // 再拉取已添加的共享文件夹；离线或读取失败的直接跳过
+      for (final ref in sharedRefs) {
+        final videos = await lanProvider.loadSharedFolderVideos(ref);
+        if (videos == null) continue;
+        await collect(videos);
       }
 
       // 按文件名排序
@@ -624,42 +1264,16 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
   Future<List<VideoItem>> _scanFolder(
     String folderPath,
     SettingsProvider settings,
-  ) async {
-    // Android 端通过 MediaStore 查询（绕过 Scoped Storage 限制）
-    if (Platform.isAndroid) {
-      // 直接透传 VideoItem，保留 MediaStore 已索引好的宽高比
-      final videos = await MediaStoreService.getFolderVideos(folderPath);
-      return videos.where((item) => isSupportedVideoPath(item.path)).toList();
-    }
+  ) => VideoScanService.scanFolder(folderPath, settings);
 
-    // 桌面端使用文件系统 API
-    List<File> files = [];
+  bool? _previousRecursiveScan;
 
-    if (settings.recursiveScan) {
-      final dir = Directory(folderPath);
-      await for (var entity in dir.list(recursive: true)) {
-        if (entity is File) {
-          files.add(entity);
-        }
-      }
-    } else {
-      final dir = Directory(folderPath);
-      final entities = await dir.list().toList();
-      files = entities.whereType<File>().toList();
-    }
+  /// 断线共享文件夹的自动重连定时器与已尝试次数
+  Timer? _reconnectTimer;
+  int _reconnectAttempt = 0;
 
-    return files
-        .where((file) => isSupportedVideoPath(file.path))
-        .map(
-          (file) => VideoItem(
-            name: file.path.split(Platform.pathSeparator).last,
-            path: file.path,
-          ),
-        )
-        .toList();
-  }
-
-  bool _previousRecursiveScan = false;
+  /// 已订阅路由事件的当前路由
+  ModalRoute<dynamic>? _route;
 
   @override
   void initState() {
@@ -669,38 +1283,160 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
     // 页面初始化时，对已有的文件夹触发统计计算
     Future.microtask(() {
       if (!mounted) return;
-      final slideProvider = Provider.of<SlideProvider>(context, listen: false);
-      final settingsProvider = Provider.of<SettingsProvider>(
-        context,
-        listen: false,
-      );
-      _previousRecursiveScan = settingsProvider.recursiveScan;
-      for (final path in slideProvider.folderPaths) {
-        _countFolderVideos(path);
+      _refreshStats();
+      _probeSharedDevices();
+    });
+  }
+
+  /// 重新统计所有已选文件夹与已排除文件的数量
+  Future<void> _refreshStats() async {
+    if (!mounted) return;
+    // 先剔除磁盘上已不存在的文件夹（在应用外被删除）
+    await _pruneMissingFolders();
+    if (!mounted) return;
+    final slideProvider = Provider.of<SlideProvider>(context, listen: false);
+    setState(() {
+      _folderStats.clear();
+    });
+    for (final path in slideProvider.folderPaths) {
+      _countFolderVideos(path);
+    }
+  }
+
+  /// 移除磁盘上已经不存在的文件夹。
+  ///
+  /// 与「存在但视频数量为 0」区分开：只要目录仍在就保留，由用户自行决定是否移除；
+  /// 目录已被删除时直接从列表与设置中移除。判断失败（如网络盘权限受限）时保留，
+  /// 避免误删用户的文件夹。
+  Future<void> _pruneMissingFolders() async {
+    if (!mounted) return;
+    // Android 的“文件夹”是 MediaStore 相册，保存的是代表性视频文件路径而非目录路径，
+    // 用 Directory.exists() 判断会把所有相册误删，因此移动端不做剔除。
+    if (Platform.isAndroid) return;
+    final slideProvider = Provider.of<SlideProvider>(context, listen: false);
+    final settingsProvider = Provider.of<SettingsProvider>(
+      context,
+      listen: false,
+    );
+    if (slideProvider.folderPaths.isEmpty) return;
+
+    final missing = <String>[];
+    for (final path in List<String>.of(slideProvider.folderPaths)) {
+      bool exists;
+      try {
+        exists = await Directory(path).exists();
+      } catch (_) {
+        exists = true;
       }
+      if (!exists) missing.add(path);
+    }
+    if (missing.isEmpty || !mounted) return;
+
+    for (final path in missing) {
+      slideProvider.removeFolderPath(path);
+      settingsProvider.setLastFolderPaths(slideProvider.folderPaths);
+    }
+    setState(() {
+      for (final path in missing) {
+        _folderStats.remove(path);
+        _scanningFolders.remove(path);
+      }
+    });
+  }
+
+  /// 探测共享源在线状态，加载封面，并启动一轮静默重连
+  Future<void> _probeSharedDevices() async {
+    if (!mounted) return;
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
+    final lan = Provider.of<LanProvider>(context, listen: false);
+    final refs = List<SharedFolderRef>.of(settings.sharedFolders);
+    if (refs.isNotEmpty) {
+      await lan.probeSharedDevices(refs);
+      if (!mounted) return;
+      await lan.loadSharedFolderCovers(refs);
+    }
+    if (!mounted) return;
+    _startSharedReconnectCycle();
+  }
+
+  /// 对离线共享文件夹按 2s / 5s / 10s 退避静默重试，最多 3 次。
+  ///
+  /// 与 LanProvider 的全局 15 秒轮询互为补充：进入本页时先快速重试几次，
+  /// 设备刚好恢复在线时无需等待下一个全局周期。
+  void _startSharedReconnectCycle() {
+    _reconnectTimer?.cancel();
+    _reconnectAttempt = 0;
+    _attemptSharedReconnect();
+  }
+
+  void _attemptSharedReconnect() {
+    if (!mounted) return;
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
+    final lan = Provider.of<LanProvider>(context, listen: false);
+    final offline = [
+      for (final ref in settings.sharedFolders)
+        if (!lan.isDeviceReachable(ref.deviceId)) ref,
+    ];
+    if (offline.isEmpty) {
+      _reconnectAttempt = 0;
+      return;
+    }
+    if (_reconnectAttempt >= 3) return;
+
+    const delays = [
+      Duration(seconds: 2),
+      Duration(seconds: 5),
+      Duration(seconds: 10),
+    ];
+    final delay = delays[_reconnectAttempt];
+    _reconnectAttempt++;
+    _reconnectTimer = Timer(delay, () async {
+      if (!mounted) return;
+      await lan.probeSharedDevices(offline);
+      if (!mounted) return;
+      // 静默刷新，不弹失败提示，避免自动重试打扰用户
+      await lan.refreshSharedFolders(offline);
+      if (!mounted) return;
+      await lan.loadSharedFolderCovers(offline);
+      if (!mounted) return;
+      _attemptSharedReconnect();
     });
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    // 订阅路由事件：从子页面（已排除分组 / 文件夹瀑布流 / 播放页）返回时重新统计
+    final route = ModalRoute.of(context);
+    if (route != null && route != _route) {
+      appRouteObserver.subscribe(this, route);
+      _route = route;
+    }
     // 当递归扫描设置变化时，重新计算所有文件夹的统计信息
     final settingsProvider = Provider.of<SettingsProvider>(context);
-    if (_previousRecursiveScan != settingsProvider.recursiveScan) {
-      _previousRecursiveScan = settingsProvider.recursiveScan;
-      final slideProvider = Provider.of<SlideProvider>(context, listen: false);
-      // 清除缓存并重新计算
-      setState(() {
-        _folderStats.clear();
-      });
-      for (final path in slideProvider.folderPaths) {
-        _countFolderVideos(path);
-      }
+    final previous = _previousRecursiveScan;
+    _previousRecursiveScan = settingsProvider.recursiveScan;
+    if (previous != null && previous != settingsProvider.recursiveScan) {
+      _refreshStats();
     }
+  }
+
+  /// 从子页面返回本页时，文件可能已被移走或删除，重新统计并刷新共享状态。
+  ///
+  /// 延后到当前帧结束再执行，避免在路由回调里直接触发 setState。
+  @override
+  void didPopNext() {
+    Future.microtask(() {
+      if (!mounted) return;
+      _refreshStats();
+      _probeSharedDevices();
+    });
   }
 
   @override
   void dispose() {
+    appRouteObserver.unsubscribe(this);
+    _reconnectTimer?.cancel();
     HardwareKeyboard.instance.removeHandler(_hardwareKeyHandler);
     super.dispose();
   }
@@ -722,224 +1458,205 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final loc = AppLocalizations.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: Text(AppLocalizations.of(context).selectFolderTitle),
+        title: Text(loc.selectVideos),
         centerTitle: true,
         backgroundColor: const Color(0xFF16213e),
       ),
-      body: Consumer2<SlideProvider, SettingsProvider>(
-        builder: (context, slideProvider, settingsProvider, child) => Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            children: [
-              // 已选文件夹列表
-              Expanded(
-                child: ListView.builder(
-                  itemCount:
-                      slideProvider.folderPaths.length +
-                      (settingsProvider.excludedPaths.isNotEmpty ? 1 : 0),
-                  // 列表会因“添加/删除文件夹”或“排除列表由空变非空”而整体位移。
-                  // 若不提供该回调，SliverChildBuilderDelegate.findIndexByKey 会返回
-                  // null，Flutter 只能按“位置”复用 Element，于是某个文件夹的条目
-                  // （连同其缩略图组件）会被复用到另一个文件夹的路径上，
-                  // 出现缩略图张冠李戴的问题。
-                  findChildIndexCallback: (Key key) => _resolveItemIndex(
-                    key,
-                    slideProvider.folderPaths,
-                    settingsProvider.excludedPaths.isNotEmpty,
-                  ),
-                  itemBuilder: (context, index) {
-                    final hasExcluded =
-                        settingsProvider.excludedPaths.isNotEmpty;
-                    // 第一个条目（如果有排除文件）是虚拟的"已排除的文件"文件夹
-                    if (hasExcluded && index == 0) {
-                      // 外层必须带 Key，findChildIndexCallback 才能把这个条目
-                      // 重新映射回位置 0
-                      return Column(
-                        key: _excludedEntryKey,
+      body: Consumer3<SlideProvider, SettingsProvider, LanProvider>(
+        builder:
+            (context, slideProvider, settingsProvider, lanProvider, child) {
+              final localPaths = slideProvider.folderPaths;
+              final sharedRefs = settingsProvider.sharedFolders;
+              final excludedGroups = _buildExcludedGroups(settingsProvider);
+              final anySharedOffline = sharedRefs.any(
+                (ref) => !lanProvider.isDeviceReachable(ref.deviceId),
+              );
+              return Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: Platform.isAndroid ? 8 : 16,
+                  vertical: 16,
+                ),
+                child: Column(
+                  children: [
+                    Expanded(
+                      child: ListView(
                         children: [
-                          _buildExcludedFolderTile(),
-                          const Divider(height: 1, color: Colors.grey),
-                        ],
-                      );
-                    }
-                    final folderIndex = hasExcluded ? index - 1 : index;
-                    final path = slideProvider.folderPaths[folderIndex];
-                    return ListTile(
-                      // 使用稳定的 Key 绑定到文件夹路径，避免 ListView 按位置复用 State，
-                      // 导致缩略图组件残留上一个位置的视频
-                      key: ValueKey('folder-$path'),
-                      // 右侧边距缩小，让删除按钮更靠右，与左侧缩略图边距更平衡
-                      contentPadding: const EdgeInsets.only(left: 16, right: 4),
-                      leading: ClipRRect(
-                        borderRadius: BorderRadius.circular(6),
-                        child: SizedBox(
-                          width: 40,
-                          height: 40,
-                          child: _ThumbnailVideo(
-                            // 把 State 与所属文件夹绑定：即使 Element 被复用到其他
-                            // 位置，Key 不一致也会让 Flutter 重建全新的 State，
-                            // 不会残留上一个文件夹已加载的缩略图
-                            key: ValueKey('thumb-$path'),
-                            thumbnailPath: null,
-                            albumPath: path,
-                          ),
-                        ),
-                      ),
-                      title: Text(
-                        // 安卓端手机宽度有限，只显示最后一级文件夹名；
-                        // Windows 端保留完整路径
-                        Platform.isAndroid ? _getLastPathSegment(path) : path,
-                        style: const TextStyle(fontSize: 14),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      subtitle: _buildFolderStats(path),
-                      // 播放：直接以该文件夹为范围进入播放；
-                      // 排除：把该文件夹移出播放列表（原「删除」按钮的动作）
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            visualDensity: VisualDensity.compact,
-                            tooltip: AppLocalizations.of(context).playFolder,
-                            icon: _playingFolders.contains(path)
-                                ? const SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
+                          if (localPaths.isNotEmpty) ...[
+                            KeyedSubtree(
+                              key: const ValueKey('local-header'),
+                              child: _buildSectionHeader(
+                                title: loc.localFoldersSection,
+                                actionsInline: true,
+                                actions: [
+                                  _actionButton(
+                                    tooltip: loc.playLocalFolders,
+                                    icon: const Icon(
+                                      Icons.play_circle_outline,
+                                      color: Colors.green,
                                     ),
-                                  )
-                                : const Icon(
-                                    Icons.play_circle_outline,
-                                    color: Colors.green,
+                                    onPressed: _isScanning
+                                        ? null
+                                        : _playLocalSection,
                                   ),
-                            onPressed: _playingFolders.contains(path)
-                                ? null
-                                : () => _playFolder(path),
-                          ),
-                          IconButton(
-                            visualDensity: VisualDensity.compact,
-                            tooltip: AppLocalizations.of(
-                              context,
-                            ).excludeFromPlay,
-                            icon: const Icon(Icons.block, color: Colors.orange),
-                            onPressed: () => _removeFolder(path),
-                          ),
-                        ],
-                      ),
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) =>
-                                FolderVideosScreen(folderPath: path),
-                          ),
-                        );
-                      },
-                    );
-                  },
-                ),
-              ),
-              // 操作按钮
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: _addFolder,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF0984e3),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        elevation: 3,
-                        shadowColor: const Color(
-                          0xFF0984e3,
-                        ).withValues(alpha: 0.3),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(Icons.add, size: 24),
-                          const SizedBox(width: 12),
-                          Text(
-                            AppLocalizations.of(context).addFolder,
-                            style: const TextStyle(fontSize: 18),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: slideProvider.folderPaths.isEmpty
-                          ? null
-                          : _excludeAll,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFd63031),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        elevation: 3,
-                        shadowColor: const Color(
-                          0xFFd63031,
-                        ).withValues(alpha: 0.3),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(Icons.block, size: 24),
-                          const SizedBox(width: 12),
-                          Text(
-                            AppLocalizations.of(context).excludeAll,
-                            style: const TextStyle(fontSize: 18),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: _isScanning ? null : _scanVideos,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF00b894),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    elevation: 4,
-                    shadowColor: const Color(0xFF00b894).withValues(alpha: 0.4),
-                  ),
-                  child: _isScanning
-                      ? const CircularProgressIndicator(color: Colors.white)
-                      : Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.play_circle, size: 24),
-                            const SizedBox(width: 12),
-                            Text(
-                              AppLocalizations.of(context).startPlay,
-                              style: const TextStyle(fontSize: 18),
+                                ],
+                              ),
                             ),
+                            for (final path in localPaths)
+                              _buildLocalFolderTile(path),
                           ],
+                          if (localPaths.isNotEmpty && sharedRefs.isNotEmpty)
+                            const Divider(height: 1, color: Colors.grey),
+                          if (sharedRefs.isNotEmpty) ...[
+                            KeyedSubtree(
+                              key: const ValueKey('shared-header'),
+                              child: _buildSectionHeader(
+                                title: loc.sharedFoldersSection,
+                                actionsInline: true,
+                                actions: [
+                                  if (anySharedOffline)
+                                    _actionButton(
+                                      tooltip: loc.lanReconnectAll,
+                                      icon: const Icon(Icons.refresh),
+                                      onPressed: () =>
+                                          _reconnectShared(sharedRefs),
+                                    )
+                                  else
+                                    _actionButton(
+                                      tooltip: loc.playSharedFolders,
+                                      icon: const Icon(
+                                        Icons.play_circle_outline,
+                                        color: Colors.green,
+                                      ),
+                                      onPressed: _isScanning
+                                          ? null
+                                          : _playSharedSection,
+                                    ),
+                                ],
+                              ),
+                            ),
+                            for (final ref in sharedRefs)
+                              _buildSharedFolderTile(ref, lanProvider),
+                          ],
+                          if (excludedGroups.isNotEmpty) ...[
+                            if (localPaths.isNotEmpty || sharedRefs.isNotEmpty)
+                              const Divider(height: 1, color: Colors.grey),
+                            _buildExcludedHeader(excludedGroups),
+                            for (final group in excludedGroups)
+                              _buildExcludedGroupTile(group),
+                          ],
+                        ],
+                      ),
+                    ),
+                    // 操作按钮
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: _addFolder,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF0984e3),
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              elevation: 3,
+                              shadowColor: const Color(
+                                0xFF0984e3,
+                              ).withValues(alpha: 0.3),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(Icons.add, size: 24),
+                                const SizedBox(width: 8),
+                                Flexible(
+                                  child: Text(
+                                    AppLocalizations.of(context).addFolder,
+                                    style: const TextStyle(fontSize: 16),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: _addShareSource,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF00cec9),
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              elevation: 3,
+                              shadowColor: const Color(
+                                0xFF00cec9,
+                              ).withValues(alpha: 0.3),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(Icons.add_link, size: 24),
+                                const SizedBox(width: 8),
+                                Flexible(
+                                  child: Text(
+                                    AppLocalizations.of(context).addShareSource,
+                                    style: const TextStyle(fontSize: 16),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: _isScanning ? null : _scanVideos,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF00b894),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          elevation: 4,
+                          shadowColor: const Color(
+                            0xFF00b894,
+                          ).withValues(alpha: 0.4),
+                        ),
+                        child: _isScanning
+                            ? const CircularProgressIndicator(
+                                color: Colors.white,
+                              )
+                            : Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  const Icon(Icons.play_circle, size: 24),
+                                  const SizedBox(width: 12),
+                                  Text(
+                                    AppLocalizations.of(context).startPlay,
+                                    style: const TextStyle(fontSize: 18),
+                                  ),
+                                ],
+                              ),
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-            ],
-          ),
-        ),
+              );
+            },
       ),
     );
   }
@@ -1116,4 +1833,19 @@ class _ThumbnailVideoState extends State<_ThumbnailVideo> {
       ),
     );
   }
+}
+
+/// 已排除视频按所在文件夹划分出的一个分组
+class _ExcludedGroup {
+  final String name;
+  final List<String> paths;
+
+  const _ExcludedGroup(this.name, this.paths);
+}
+
+/// “添加共享源”弹窗的选择结果：device 为空表示需要手动输入地址
+class _ShareSourcePick {
+  final LanDevice? device;
+
+  const _ShareSourcePick(this.device);
 }

@@ -6,10 +6,13 @@
     <!-- 读取存储权限（Android 12 及以下） -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
+    <!-- 局域网共享：UDP 设备发现与 HTTP 视频服务 -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <application
         android:label="SteamFlow"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"

@@ -9,8 +9,39 @@ on:
 permissions:
   contents: write
 
+env:
+  # 与本地 pubspec.lock 中记录的镜像地址保持一致。
+  # 否则 pub get 会因 hosted URL 不同而重新解析依赖，拉取未经验证的最新版本
+  # （例如 shared_preferences_android 2.5.1，会导致 Android 启动白屏）。
+  PUB_HOSTED_URL: 'https://pub.flutter-io.cn'
+
 jobs:
+  # 质量门禁：静态分析与单元测试，失败时不产出发布包
+  verify:
+    name: Analyze & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.8
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get --enforce-lockfile
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
   windows:
+    needs: verify
     runs-on: windows-latest
 
     steps:
@@ -26,7 +57,7 @@ jobs:
           cache: true
 
       - name: Install dependencies
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       - name: Build Windows release
         run: flutter build windows --release
@@ -36,16 +67,15 @@ jobs:
         run: |
           Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath "SteamFlow-${{ github.ref_name }}-windows-x64.zip"
 
-      - name: Upload to release
-        uses: softprops/action-gh-release@v2
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.ref_name }}
-          files: SteamFlow-*.zip
-          generate_release_notes: true
-          draft: false
-          prerelease: false
+          name: windows-zip
+          path: SteamFlow-*.zip
+          if-no-files-found: error
 
   android:
+    needs: verify
     runs-on: ubuntu-latest
 
     steps:
@@ -107,7 +137,7 @@ jobs:
             set -ex
             flutter doctor -v || true
             yes | flutter doctor --android-licenses > /dev/null 2>&1 || true
-            flutter pub get
+            flutter pub get --enforce-lockfile
             flutter build apk --release
           } 2>&1 | tee android-build.log || {
             ERR=$(sed -n '/What went wrong/,$p' android-build.log | head -n 25 | tr '\n' '~')
@@ -119,10 +149,57 @@ jobs:
       - name: Rename APK
         run: mv build/app/outputs/flutter-apk/app-release.apk "SteamFlow-${GITHUB_REF_NAME}-android.apk"
 
-      - name: Upload to release
-        uses: softprops/action-gh-release@v2
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: SteamFlow-*-android.apk
+          if-no-files-found: error
+
+  # 两个构建任务都完成后统一发布，避免两次并发创建同一个 Release
+  release:
+    name: Publish GitHub Release
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      # 必须检出仓库：发布说明文件在仓库内，仅下载构建产物拿不到
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -l dist
+
+      # 仓库内存在对应版本的说明文档时，用它作为 Release 正文；
+      # 找不到则回退到 GitHub 自动生成的变更列表
+      - name: Resolve release notes
+        id: notes
+        run: |
+          NOTES="release/RELEASE_NOTES_${GITHUB_REF_NAME}.md"
+          if [ -f "$NOTES" ]; then
+            echo "body_path=$NOTES" >> "$GITHUB_OUTPUT"
+            echo "Using $NOTES"
+          else
+            echo "No release notes file, falling back to generated notes"
+          fi
+
+      - uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
-          files: SteamFlow-*-android.apk
+          files: dist/*
+          # 有自定义说明时不再让 GitHub 生成变更列表，避免两者互相覆盖
+          generate_release_notes: ${{ steps.notes.outputs.body_path == '' }}
+          body_path: ${{ steps.notes.outputs.body_path }}
           draft: false
           prerelease: false
+
+      # 显式再写一次正文：action 在更新既有 Release 时未必会覆盖正文，
+      # 用 gh release edit 保证自定义说明一定生效
+      - name: Apply release notes
+        if: steps.notes.outputs.body_path != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${GITHUB_REF_NAME}" --notes-file "${{ steps.notes.outputs.body_path }}"

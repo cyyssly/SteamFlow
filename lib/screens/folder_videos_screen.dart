@@ -10,10 +10,21 @@ import 'package:steam_flow/services/fullscreen_service.dart';
 import 'package:steam_flow/services/video_scan_service.dart';
 import 'package:steam_flow/services/media_store_service.dart';
 import 'package:steam_flow/widgets/masonry_video_grid.dart';
+import 'package:steam_flow/widgets/sort_alphabet_icon.dart';
 import 'package:steam_flow/l10n/app_localizations.dart';
+import 'package:steam_flow/main.dart';
 
 /// 瀑布流排序方式
-enum _SortMode { byName, byTime, random }
+enum _SortAction {
+  nameAsc,
+  nameDesc,
+  timeNewest,
+  timeOldest,
+  sizeLargest,
+  sizeSmallest,
+  random,
+  newPreferred,
+}
 
 /// 文件夹视频瀑布流浏览页
 ///
@@ -28,7 +39,8 @@ class FolderVideosScreen extends StatefulWidget {
   State<FolderVideosScreen> createState() => _FolderVideosScreenState();
 }
 
-class _FolderVideosScreenState extends State<FolderVideosScreen> {
+class _FolderVideosScreenState extends State<FolderVideosScreen>
+    with RouteAware {
   /// 全部视频（扫描结果）
   List<VideoItem> _allItems = [];
 
@@ -46,30 +58,123 @@ class _FolderVideosScreenState extends State<FolderVideosScreen> {
   /// 是否正在预加载（防止重复触发）
   bool _isPreloading = false;
 
-  /// 当前排序方式
-  _SortMode _sortMode = _SortMode.byName;
-
-  /// 顺序模式下是否为升序（true = 顺序，false = 逆序）
-  bool _nameAscending = true;
-
-  /// 最新模式下是否最新在前（true = 最新，false = 最旧）
-  bool _newestFirst = true;
+  /// 当前排序方式（默认顺序）
+  _SortAction _sortAction = _SortAction.nameAsc;
 
   /// 批次代次：每次重新排序都自增，使跨越排序、尚在途中的旧批次作废，
   /// 避免把「旧顺序下的这一批已就绪」错误地记到新顺序的批次边界上。
   int _batchGeneration = 0;
 
+  /// 已订阅路由事件的当前路由
+  ModalRoute<dynamic>? _route;
+
   @override
   void initState() {
     super.initState();
+    _restoreSortMode();
     _loadVideos();
     HardwareKeyboard.instance.addHandler(_hardwareKeyHandler);
   }
 
+  /// 恢复该文件夹上次使用的排序方式；用户未选择过时跟随设置页的播放顺序
+  void _restoreSortMode() {
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
+    final saved = settings.localSortFor(widget.folderPath);
+    if (saved != null) {
+      for (final action in _SortAction.values) {
+        if (action.name == saved) {
+          _sortAction = action;
+          return;
+        }
+      }
+    }
+    _sortAction = _actionForPlayOrder(settings.playOrder);
+  }
+
+  /// 设置页播放顺序 → 瀑布流排序方式的映射
+  static _SortAction _actionForPlayOrder(PlayOrder order) {
+    switch (order) {
+      case PlayOrder.sequential:
+        return _SortAction.nameAsc;
+      case PlayOrder.reverseSequential:
+        return _SortAction.nameDesc;
+      case PlayOrder.newestFirst:
+        return _SortAction.timeNewest;
+      case PlayOrder.oldestFirst:
+        return _SortAction.timeOldest;
+      case PlayOrder.sizeLargest:
+        return _SortAction.sizeLargest;
+      case PlayOrder.sizeSmallest:
+        return _SortAction.sizeSmallest;
+      case PlayOrder.random:
+        return _SortAction.random;
+      case PlayOrder.newPreferred:
+        return _SortAction.newPreferred;
+    }
+  }
+
   @override
   void dispose() {
+    appRouteObserver.unsubscribe(this);
     HardwareKeyboard.instance.removeHandler(_hardwareKeyHandler);
     super.dispose();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route != null && route != _route) {
+      appRouteObserver.subscribe(this, route);
+      _route = route;
+    }
+  }
+
+  /// 从播放页返回时，排除/删除操作可能改变了文件集合，过滤后重建批次。
+  @override
+  void didPopNext() {
+    unawaited(
+      Future.microtask(() async {
+        if (!mounted) return;
+        await _refreshAfterReturn();
+      }),
+    );
+  }
+
+  Future<void> _refreshAfterReturn() async {
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
+    final excluded = {
+      for (final path in settings.excludedPaths)
+        Platform.isWindows ? path.toLowerCase() : path,
+    };
+
+    final filtered = <VideoItem>[];
+    for (final item in _allItems) {
+      final key = Platform.isWindows ? item.path.toLowerCase() : item.path;
+      if (excluded.contains(key)) continue;
+      // 逐个异步检查，避免大量文件时在 UI 线程做同步磁盘访问
+      try {
+        if (!await File(item.path).exists()) continue;
+      } catch (_) {
+        continue;
+      }
+      filtered.add(item);
+    }
+    if (!mounted) return;
+
+    if (filtered.length == _allItems.length) {
+      setState(() => _selectedIndex = null);
+      return;
+    }
+    final loaded = _loadedCount.clamp(0, filtered.length);
+    setState(() {
+      _batchGeneration++;
+      _selectedIndex = null;
+      _allItems = filtered;
+      _items = filtered.take(loaded).toList();
+      _loadedCount = loaded;
+    });
+    unawaited(_bootstrapBatches());
   }
 
   /// 键盘快捷键：F11 切换全屏，ESC 返回文件夹列表
@@ -233,31 +338,57 @@ class _FolderVideosScreenState extends State<FolderVideosScreen> {
   // ── 排序 ──
   /// 按当前排序方式排列 [_allItems]
   void _applySortToAllItems() {
-    switch (_sortMode) {
-      case _SortMode.byName:
-        _allItems.sort((a, b) {
-          final cmp = a.name.compareTo(b.name);
-          return _nameAscending ? cmp : -cmp;
-        });
+    switch (_sortAction) {
+      case _SortAction.nameAsc:
+        _allItems.sort((a, b) => a.name.compareTo(b.name));
         break;
-      case _SortMode.byTime:
-        _allItems.sort((a, b) {
-          final cmp = _modifiedTimeOf(a).compareTo(_modifiedTimeOf(b));
-          return _newestFirst ? -cmp : cmp;
-        });
+      case _SortAction.nameDesc:
+        _allItems.sort((a, b) => b.name.compareTo(a.name));
         break;
-      case _SortMode.random:
+      case _SortAction.timeNewest:
+        _allItems.sort(
+          (a, b) => _modifiedTimeOf(b).compareTo(_modifiedTimeOf(a)),
+        );
+        break;
+      case _SortAction.timeOldest:
+        _allItems.sort(
+          (a, b) => _modifiedTimeOf(a).compareTo(_modifiedTimeOf(b)),
+        );
+        break;
+      case _SortAction.sizeLargest:
+        _allItems.sort((a, b) => _sizeOf(b).compareTo(_sizeOf(a)));
+        break;
+      case _SortAction.sizeSmallest:
+        _allItems.sort((a, b) => _sizeOf(a).compareTo(_sizeOf(b)));
+        break;
+      case _SortAction.random:
         _allItems.shuffle();
+        break;
+      case _SortAction.newPreferred:
+        SlideProvider.applyNewPreferredOrder(_allItems);
         break;
     }
   }
 
-  /// 读取文件修改时间；读取失败时按最早处理，保证排序结果稳定
+  /// 读取文件修改时间；优先用扫描时已带的时间，缺失时回退到文件系统
   DateTime _modifiedTimeOf(VideoItem item) {
+    final known = item.modifiedTime;
+    if (known != null) return known;
     try {
       return File(item.path).lastModifiedSync();
     } catch (_) {
       return DateTime.fromMillisecondsSinceEpoch(0);
+    }
+  }
+
+  /// 读取文件大小；优先用扫描时已带的值，缺失时回退到文件系统
+  int _sizeOf(VideoItem item) {
+    final known = item.sizeBytes;
+    if (known != null) return known;
+    try {
+      return File(item.path).lengthSync();
+    } catch (_) {
+      return 0;
     }
   }
 
@@ -273,45 +404,92 @@ class _FolderVideosScreenState extends State<FolderVideosScreen> {
     unawaited(_bootstrapBatches());
   }
 
-  /// 顺序：点击切到顺序模式；已在顺序模式时，再次点击在顺序/逆序间切换
-  void _onSortByNamePressed() {
-    if (_sortMode == _SortMode.byName) {
-      _nameAscending = !_nameAscending;
-    } else {
-      _sortMode = _SortMode.byName;
-    }
+  /// 应用菜单中选中的排序方式，并记住该文件夹的选择
+  void _applySort(_SortAction action) {
+    _sortAction = action;
+    Provider.of<SettingsProvider>(
+      context,
+      listen: false,
+    ).setLocalSort(widget.folderPath, action.name);
     _resort();
   }
 
-  /// 最新：点击切到最新模式；已在最新模式时，再次点击在最新/最旧间切换
-  void _onSortByTimePressed() {
-    if (_sortMode == _SortMode.byTime) {
-      _newestFirst = !_newestFirst;
-    } else {
-      _sortMode = _SortMode.byTime;
-      _newestFirst = true;
-    }
-    _resort();
-  }
+  bool _isSortActive(_SortAction action) => _sortAction == action;
 
-  /// 随机：每次点击都重新打乱
-  void _onSortRandomPressed() {
-    _sortMode = _SortMode.random;
-    _resort();
-  }
-
-  /// 排序按钮；当前生效的排序方式用强调色标识，图标体现方向
-  Widget _buildSortButton({
-    required IconData icon,
-    required String tooltip,
-    required bool active,
-    required VoidCallback onPressed,
+  PopupMenuItem<_SortAction> _sortMenuItem({
+    required _SortAction action,
+    required String label,
+    required Widget Function(Color color) iconBuilder,
   }) {
-    return IconButton(
-      icon: Icon(icon),
-      color: active ? const Color(0xFFe94560) : Colors.white70,
-      tooltip: tooltip,
-      onPressed: onPressed,
+    final selected = _isSortActive(action);
+    final color = selected ? const Color(0xFFe94560) : Colors.white70;
+    return PopupMenuItem<_SortAction>(
+      value: action,
+      child: Row(
+        children: [
+          SizedBox(
+            width: 24,
+            height: 24,
+            child: Center(child: iconBuilder(color)),
+          ),
+          const SizedBox(width: 12),
+          Expanded(child: Text(label)),
+          if (selected) Icon(Icons.check, color: color, size: 18),
+        ],
+      ),
+    );
+  }
+
+  /// 排序入口：用一个按钮弹出全部排序方式，避免占用过多标题栏空间
+  Widget _buildSortMenu(AppLocalizations loc) {
+    return PopupMenuButton<_SortAction>(
+      tooltip: loc.sortBy,
+      icon: const Icon(Icons.sort, color: Colors.white70),
+      onSelected: _applySort,
+      itemBuilder: (context) => [
+        _sortMenuItem(
+          action: _SortAction.nameAsc,
+          label: loc.sortSequential,
+          iconBuilder: (color) =>
+              SortAlphabetIcon(ascending: true, color: color),
+        ),
+        _sortMenuItem(
+          action: _SortAction.nameDesc,
+          label: loc.sortReverse,
+          iconBuilder: (color) =>
+              SortAlphabetIcon(ascending: false, color: color),
+        ),
+        _sortMenuItem(
+          action: _SortAction.timeNewest,
+          label: loc.sortNewest,
+          iconBuilder: (color) => Icon(Icons.update, color: color),
+        ),
+        _sortMenuItem(
+          action: _SortAction.timeOldest,
+          label: loc.sortOldest,
+          iconBuilder: (color) => Icon(Icons.history, color: color),
+        ),
+        _sortMenuItem(
+          action: _SortAction.sizeLargest,
+          label: loc.largestFirst,
+          iconBuilder: (color) => Icon(Icons.south, color: color),
+        ),
+        _sortMenuItem(
+          action: _SortAction.sizeSmallest,
+          label: loc.smallestFirst,
+          iconBuilder: (color) => Icon(Icons.north, color: color),
+        ),
+        _sortMenuItem(
+          action: _SortAction.random,
+          label: loc.sortRandom,
+          iconBuilder: (color) => Icon(Icons.shuffle, color: color),
+        ),
+        _sortMenuItem(
+          action: _SortAction.newPreferred,
+          label: loc.newPreferred,
+          iconBuilder: (color) => Icon(Icons.fiber_new, color: color),
+        ),
+      ],
     );
   }
 
@@ -353,15 +531,13 @@ class _FolderVideosScreenState extends State<FolderVideosScreen> {
   /// 从瀑布流进入播放。
   ///
   /// 播放范围限定为当前文件夹：使用本次扫描到的全部视频（而不是仅已加载的
-  /// 那一批），顺序按「播放顺序」设置排列，起点为被点中的那个视频。
+  /// 那一批），顺序沿用瀑布流当前的排序，起点为被点中的那个视频。
   void _startPlaybackFrom(int index) {
     if (index < 0 || index >= _items.length) return;
     final item = _items[index];
-    final settings = Provider.of<SettingsProvider>(context, listen: false);
     final slideProvider = Provider.of<SlideProvider>(context, listen: false);
 
-    slideProvider.setVideos(_allItems.toList(), playOrder: settings.playOrder);
-    slideProvider.sortByPlayOrder(settings.playOrder);
+    slideProvider.setVideos(_allItems.toList(), followListOrder: true);
     // 排序后重新定位被点中的视频；理论上必然能找到，兜底回到第一个
     final startIndex = slideProvider.videos.indexWhere(
       (video) => video.path == item.path,
@@ -401,33 +577,7 @@ class _FolderVideosScreenState extends State<FolderVideosScreen> {
           ),
           centerTitle: true,
           backgroundColor: const Color(0xFF16213e),
-          actions: [
-            if (_items.isNotEmpty) ...[
-              // 顺序/逆序：用一对方向相反的箭头表示升序/降序
-              _buildSortButton(
-                icon: _nameAscending
-                    ? Icons.arrow_upward
-                    : Icons.arrow_downward,
-                tooltip: _nameAscending ? loc.sortSequential : loc.sortReverse,
-                active: _sortMode == _SortMode.byName,
-                onPressed: _onSortByNamePressed,
-              ),
-              // 最新/最旧：用一对方向相反的时钟图标表示时间倒序/正序
-              _buildSortButton(
-                icon: _newestFirst ? Icons.update : Icons.history,
-                tooltip: _newestFirst ? loc.sortNewest : loc.sortOldest,
-                active: _sortMode == _SortMode.byTime,
-                onPressed: _onSortByTimePressed,
-              ),
-              // 随机（每次点击重新打乱）
-              _buildSortButton(
-                icon: Icons.shuffle,
-                tooltip: loc.sortRandom,
-                active: _sortMode == _SortMode.random,
-                onPressed: _onSortRandomPressed,
-              ),
-            ],
-          ],
+          actions: [if (_items.isNotEmpty) _buildSortMenu(loc)],
         ),
         body: _isLoading
             ? const Center(child: CircularProgressIndicator())

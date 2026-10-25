@@ -1,6 +1,24 @@
+/// 视频来源：本机文件或局域网共享
+enum VideoSource { local, remote }
+
 class VideoItem {
   final String name;
   final String path;
+
+  /// 视频来源（本机文件 / 局域网共享）
+  final VideoSource source;
+
+  /// 远端原片地址（仅 remote 使用）
+  final String? remoteUrl;
+
+  /// 远端缩略图地址（仅 remote 使用）
+  final String? thumbUrl;
+
+  /// 远端主机 id（仅 remote 使用）
+  final String? deviceId;
+
+  /// 远端视频在该主机内的唯一标识（仅 remote 使用）
+  final String? remoteId;
 
   /// 视频宽高比（宽/高），用于瀑布流布局。未知时为 null。
   final double? aspectRatio;
@@ -21,10 +39,29 @@ class VideoItem {
   VideoItem({
     required this.name,
     required this.path,
+    this.source = VideoSource.local,
+    this.remoteUrl,
+    this.thumbUrl,
+    this.deviceId,
+    this.remoteId,
     this.aspectRatio,
     this.modifiedTime,
     this.sizeBytes,
     this.width,
     this.height,
   });
+
+  bool get isRemote => source == VideoSource.remote;
+
+  /// 列表去重与状态比较用的唯一键。
+  ///
+  /// 本机用路径；远端用「设备 + 文件夹 + 相对路径」，
+  /// 避免不同共享目录中的同名文件互相覆盖。
+  String get key => isRemote
+      ? 'remote://${deviceId ?? ''}/${remoteId ?? ''}'
+      : path;
+
+  /// 交给播放器打开的地址：本机路径或远端 HTTP 地址。
+  String get playbackUrl => isRemote ? (remoteUrl ?? '') : path;
 }
+

@@ -6,8 +6,8 @@ import 'package:steam_flow/providers/slide_provider.dart';
 import 'package:steam_flow/providers/settings_provider.dart';
 import 'package:steam_flow/screens/folder_selection_screen.dart';
 import 'package:steam_flow/screens/help_screen.dart';
-import 'package:steam_flow/services/media_store_service.dart';
-import 'package:steam_flow/services/video_formats.dart';
+import 'package:steam_flow/screens/lan_devices_screen.dart';
+import 'package:steam_flow/services/video_scan_service.dart';
 import 'package:steam_flow/l10n/app_localizations.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -167,40 +167,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<List<VideoItem>> _scanFolder(
     String folderPath,
     SettingsProvider settings,
-  ) async {
-    // Android 端通过 MediaStore 查询（绕过 Scoped Storage 限制）
-    if (Platform.isAndroid) {
-      // 直接透传 VideoItem，保留 MediaStore 已索引好的宽高比
-      final videos = await MediaStoreService.getFolderVideos(folderPath);
-      return videos.where((item) => isSupportedVideoPath(item.path)).toList();
-    }
-
-    // 桌面端使用文件系统 API
-    List<File> files = [];
-
-    if (settings.recursiveScan) {
-      final dir = Directory(folderPath);
-      await for (var entity in dir.list(recursive: true)) {
-        if (entity is File) {
-          files.add(entity);
-        }
-      }
-    } else {
-      final dir = Directory(folderPath);
-      final entities = await dir.list().toList();
-      files = entities.whereType<File>().toList();
-    }
-
-    return files
-        .where((file) => isSupportedVideoPath(file.path))
-        .map(
-          (file) => VideoItem(
-            name: file.path.split(Platform.pathSeparator).last,
-            path: file.path,
-          ),
-        )
-        .toList();
-  }
+  ) => VideoScanService.scanFolder(folderPath, settings);
 
   Future<void> _startPlayback() async {
     final slideProvider = Provider.of<SlideProvider>(context, listen: false);
@@ -402,12 +369,46 @@ class _HomeScreenState extends State<HomeScreen> {
                             const Icon(Icons.folder_open, size: 24),
                             const SizedBox(width: 12),
                             Text(
-                              AppLocalizations.of(context).selectFolder,
+                              AppLocalizations.of(context).selectVideos,
                               style: const TextStyle(fontSize: 18),
                             ),
                           ],
                         ),
                       ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: MediaQuery.of(context).size.width * 0.5,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const LanDevicesScreen()),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF00b894),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 32,
+                      vertical: 16,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    elevation: 3,
+                    shadowColor: const Color(0xFF00b894).withValues(alpha: 0.3),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.lan_outlined, size: 24),
+                      const SizedBox(width: 12),
+                      Text(
+                        AppLocalizations.of(context).lanSharePageTitle,
+                        style: const TextStyle(fontSize: 18),
+                      ),
+                    ],
+                  ),
+                ),
               ),
               const SizedBox(height: 12),
               SizedBox(

@@ -11,14 +11,25 @@ class SlideProvider extends ChangeNotifier {
   bool _isPlaying = false;
   List<String> _folderPaths = [];
 
+  /// 是否按传入列表的既有顺序播放（从瀑布流进入时为其当前排序）
+  bool _followListOrder = false;
+
   List<VideoItem> get videos => _videos;
   int get currentIndex => _currentIndex;
   bool get isPlaying => _isPlaying;
+
+  /// 是否按传入列表的既有顺序播放
+  bool get followListOrder => _followListOrder;
   String get folderPath => _folderPaths.isNotEmpty ? _folderPaths.first : '';
   List<String> get folderPaths => _folderPaths;
 
-  void setVideos(List<VideoItem> videos, {PlayOrder? playOrder}) {
+  void setVideos(
+    List<VideoItem> videos, {
+    PlayOrder? playOrder,
+    bool followListOrder = false,
+  }) {
     _videos = videos;
+    _followListOrder = followListOrder;
     _randomOrder = List.generate(videos.length, (i) => i)..shuffle();
     _currentIndex = (playOrder == PlayOrder.random && _randomOrder.isNotEmpty)
         ? _randomOrder[0]
@@ -28,7 +39,7 @@ class SlideProvider extends ChangeNotifier {
 
   void addVideos(List<VideoItem> videos) {
     for (final video in videos) {
-      if (!_videos.any((existing) => existing.path == video.path)) {
+      if (!_videos.any((existing) => existing.key == video.key)) {
         _videos.add(video);
       }
     }
@@ -184,6 +195,7 @@ class SlideProvider extends ChangeNotifier {
     _isPlaying = false;
     _folderPaths.clear();
     _randomOrder = [];
+    _followListOrder = false;
     notifyListeners();
   }
 
@@ -228,6 +240,12 @@ class SlideProvider extends ChangeNotifier {
           break;
         case PlayOrder.oldestFirst:
           insertIndex = _findInsertIndexByTime(video.path, newestFirst: false);
+          break;
+        case PlayOrder.sizeLargest:
+          insertIndex = _findInsertIndexBySize(video, largestFirst: true);
+          break;
+        case PlayOrder.sizeSmallest:
+          insertIndex = _findInsertIndexBySize(video, largestFirst: false);
           break;
         case PlayOrder.random:
           insertIndex = _videos.length;
@@ -332,6 +350,45 @@ class SlideProvider extends ChangeNotifier {
     return low;
   }
 
+  /// 二分查找按文件大小的插入位置
+  /// [largestFirst] = true: 由大到小（降序），false: 由小到大（升序）
+  int _findInsertIndexBySize(VideoItem video, {required bool largestFirst}) {
+    int low = 0, high = _videos.length;
+    while (low < high) {
+      final mid = (low + high) ~/ 2;
+      if (_compareBySize(_videos[mid], video, largestFirst: largestFirst) <=
+          0) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    return low;
+  }
+
+  /// 读取视频大小：远端视频直接使用其提供的值，本地视频回退到文件系统。
+  static int _sizeOf(VideoItem item) {
+    final known = item.sizeBytes;
+    if (known != null) return known;
+    if (item.path.isEmpty) return 0;
+    try {
+      return File(item.path).lengthSync();
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// 按文件大小比较
+  static int _compareBySize(
+    VideoItem a,
+    VideoItem b, {
+    required bool largestFirst,
+  }) {
+    final aSize = _sizeOf(a);
+    final bSize = _sizeOf(b);
+    return largestFirst ? bSize.compareTo(aSize) : aSize.compareTo(bSize);
+  }
+
   /// 根据播放顺序模式对视频列表进行排序
   void sortByPlayOrder(PlayOrder order) {
     switch (order) {
@@ -344,65 +401,71 @@ class SlideProvider extends ChangeNotifier {
         _videos.sort((a, b) => b.name.compareTo(a.name));
         break;
       case PlayOrder.newestFirst:
-        // 按文件修改时间从新到旧
-        _videos.sort((a, b) {
-          try {
-            final aTime = File(a.path).lastModifiedSync();
-            final bTime = File(b.path).lastModifiedSync();
-            return bTime.compareTo(aTime);
-          } catch (_) {
-            return 0;
-          }
-        });
+        // 按修改时间从新到旧
+        _videos.sort(
+          (a, b) => _modifiedTimeOf(b).compareTo(_modifiedTimeOf(a)),
+        );
         break;
       case PlayOrder.oldestFirst:
-        // 按文件修改时间从旧到新
-        _videos.sort((a, b) {
-          try {
-            final aTime = File(a.path).lastModifiedSync();
-            final bTime = File(b.path).lastModifiedSync();
-            return aTime.compareTo(bTime);
-          } catch (_) {
-            return 0;
-          }
-        });
+        // 按修改时间从旧到新
+        _videos.sort(
+          (a, b) => _modifiedTimeOf(a).compareTo(_modifiedTimeOf(b)),
+        );
+        break;
+      case PlayOrder.sizeLargest:
+        // 按文件大小从大到小
+        _videos.sort((a, b) => _compareBySize(a, b, largestFirst: true));
+        break;
+      case PlayOrder.sizeSmallest:
+        // 按文件大小从小到大
+        _videos.sort((a, b) => _compareBySize(a, b, largestFirst: false));
         break;
       case PlayOrder.random:
         // 随机模式不排序视频本身，使用 `_randomOrder` 序列
         break;
       case PlayOrder.newPreferred:
-        // 新视频优先：加权随机重排，新视频有更高概率放在前面
-        // 1. 先按修改时间从新到旧排序
-        _videos.sort((a, b) {
-          try {
-            final aTime = File(a.path).lastModifiedSync();
-            final bTime = File(b.path).lastModifiedSync();
-            return bTime.compareTo(aTime);
-          } catch (_) {
-            return 0;
-          }
-        });
-        // 2. 加权随机打乱：越新的图偏移越小，保留靠前位置
-        final rng = Random();
-        for (int i = 0; i < _videos.length; i++) {
-          final progress = i / _videos.length; // 0~1
-          // 偏移范围：前部30% → 后部90%，逐步增大
-          final rangeRatio = 0.3 + progress * 0.6;
-          final maxOffset = (_videos.length * rangeRatio).ceil().clamp(
-            1,
-            _videos.length - i,
-          );
-          final j = i + rng.nextInt(maxOffset);
-          if (j < _videos.length) {
-            final temp = _videos[i];
-            _videos[i] = _videos[j];
-            _videos[j] = temp;
-          }
-        }
+        applyNewPreferredOrder(_videos);
         break;
     }
     _currentIndex = 0;
     _randomOrder = List.generate(_videos.length, (i) => i)..shuffle();
     notifyListeners();
+  }
+
+  /// 新视频优先排序：先按修改时间从新到旧，再做加权随机重排，
+  /// 越新的视频偏移范围越小，因此更大概率保留在靠前位置。
+  ///
+  /// 瀑布流页面与播放顺序共用该逻辑，保证两边看到的新视频顺序一致。
+  static void applyNewPreferredOrder(List<VideoItem> items) {
+    if (items.length < 2) return;
+    items.sort((a, b) => _modifiedTimeOf(b).compareTo(_modifiedTimeOf(a)));
+    final rng = Random();
+    for (int i = 0; i < items.length; i++) {
+      final progress = i / items.length; // 0~1
+      // 偏移范围：前部30% → 后部90%，逐步增大
+      final rangeRatio = 0.3 + progress * 0.6;
+      final maxOffset = (items.length * rangeRatio).ceil().clamp(
+        1,
+        items.length - i,
+      );
+      final j = i + rng.nextInt(maxOffset);
+      if (j < items.length) {
+        final temp = items[i];
+        items[i] = items[j];
+        items[j] = temp;
+      }
+    }
+  }
+
+  /// 读取视频修改时间：优先用扫描/远端已带的时间，
+  /// 缺失时才回退到本地文件系统（远端条目的 path 为空）。
+  static DateTime _modifiedTimeOf(VideoItem item) {
+    final known = item.modifiedTime;
+    if (known != null) return known;
+    try {
+      return File(item.path).lastModifiedSync();
+    } catch (_) {
+      return DateTime.fromMillisecondsSinceEpoch(0);
+    }
   }
 }

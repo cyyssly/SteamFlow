@@ -360,7 +360,7 @@ class _MasonryVideoCardState extends State<_MasonryVideoCard> {
   @override
   void didUpdateWidget(covariant _MasonryVideoCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.item.path != widget.item.path) {
+    if (oldWidget.item.key != widget.item.key) {
       // didUpdateWidget 之后紧接着就会 build，直接改字段即可，无需 setState
       _adoptThumbnail();
     }
@@ -368,6 +368,12 @@ class _MasonryVideoCardState extends State<_MasonryVideoCard> {
 
   /// 取缓存里已有的缩略图直接显示；没有则发起一次异步生成。
   void _adoptThumbnail() {
+    // 远端缩略图由网络按需加载，不走本机取帧缓存
+    if (widget.item.isRemote) {
+      _thumbnail = null;
+      _loading = false;
+      return;
+    }
     final cached = VideoThumbnailService.cached(widget.item.path);
     _thumbnail = cached;
     _loading = cached == null;
@@ -377,6 +383,7 @@ class _MasonryVideoCardState extends State<_MasonryVideoCard> {
   }
 
   Future<void> _fetchThumbnail() async {
+    if (widget.item.isRemote) return;
     final requestId = ++_requestId;
     final thumbnail = await VideoThumbnailService.thumbnailFor(
       widget.item.path,
@@ -439,7 +446,33 @@ class _MasonryVideoCardState extends State<_MasonryVideoCard> {
   /// 视频首帧。缩略图来自 [VideoThumbnailService] 的内存缓存，
   /// 复用同一个字节数组实例可让 [MemoryImage] 的键保持一致，
   /// 重建时命中 Flutter 自己的 ImageCache。
+  ///
+  /// 远端视频直接用服务端提供的缩略图 URL，由 [Image.network] 缓存。
   Widget _buildThumbnail(BuildContext context) {
+    if (widget.item.isRemote) {
+      final url = widget.item.thumbUrl;
+      if (url == null || url.isEmpty) {
+        return Container(
+          color: const Color(0xFF1a1a2e),
+          alignment: Alignment.center,
+          child: const Icon(Icons.broken_image, color: Colors.grey),
+        );
+      }
+      return Image.network(
+        url,
+        fit: BoxFit.fill,
+        width: double.infinity,
+        height: double.infinity,
+        // 服务端缩略图宽度固定为 512，按它限制解码尺寸避免放大解码
+        cacheWidth: MasonryVideoGrid.thumbnailDecodeWidthFor(context, 512),
+        errorBuilder: (_, _, _) => Container(
+          color: const Color(0xFF1a1a2e),
+          alignment: Alignment.center,
+          child: const Icon(Icons.broken_image, color: Colors.grey),
+        ),
+      );
+    }
+
     final thumbnail = _thumbnail;
     if (thumbnail == null) {
       return Container(

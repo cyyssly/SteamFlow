@@ -11,21 +11,32 @@ import 'package:steam_flow/services/video_scan_service.dart';
 import 'package:steam_flow/services/media_store_service.dart';
 import 'package:steam_flow/widgets/masonry_video_grid.dart';
 import 'package:steam_flow/l10n/app_localizations.dart';
+import 'package:steam_flow/main.dart';
 
 class ExcludedVideosScreen extends StatefulWidget {
-  const ExcludedVideosScreen({super.key});
+  const ExcludedVideosScreen({super.key, this.folderName, this.paths});
+
+  /// 分组名称（手机端为目录名，桌面端为完整路径），为空时显示通用标题
+  final String? folderName;
+
+  /// 只显示这些已排除文件；为空时显示全部已排除文件
+  final List<String>? paths;
 
   @override
   State<ExcludedVideosScreen> createState() => _ExcludedVideosScreenState();
 }
 
-class _ExcludedVideosScreenState extends State<ExcludedVideosScreen> {
+class _ExcludedVideosScreenState extends State<ExcludedVideosScreen>
+    with RouteAware {
   List<VideoItem> _excludedItems = [];
   bool _isLoading = true;
   int? _selectedIndex;
 
   /// 每批处理的视频数量，避免一次性读取过多元数据/解码过多视频
   static const _batchSize = 30;
+
+  /// 已订阅路由事件的当前路由
+  ModalRoute<dynamic>? _route;
 
   @override
   void initState() {
@@ -35,9 +46,29 @@ class _ExcludedVideosScreenState extends State<ExcludedVideosScreen> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route != null && route != _route) {
+      appRouteObserver.subscribe(this, route);
+      _route = route;
+    }
+  }
+
+  @override
   void dispose() {
+    appRouteObserver.unsubscribe(this);
     HardwareKeyboard.instance.removeHandler(_hardwareKeyHandler);
     super.dispose();
+  }
+
+  /// 从播放页返回时，文件可能已被删除或恢复，重新加载当前分组
+  @override
+  void didPopNext() {
+    Future.microtask(() {
+      if (!mounted) return;
+      _loadExcludedVideos();
+    });
   }
 
   /// 键盘快捷键：F11 切换全屏
@@ -67,8 +98,13 @@ class _ExcludedVideosScreenState extends State<ExcludedVideosScreen> {
 
   void _loadExcludedVideos() {
     final settings = Provider.of<SettingsProvider>(context, listen: false);
+    // 从某个已排除分组进入时只显示该分组的文件
+    final source = widget.paths ?? settings.excludedPaths;
     final items = <VideoItem>[];
-    for (final path in settings.excludedPaths) {
+    final seen = <String>{};
+    for (final path in source) {
+      // 历史数据里可能存在重复路径，只统计一次
+      if (!seen.add(path)) continue;
       final file = File(path);
       if (file.existsSync()) {
         items.add(
@@ -206,7 +242,8 @@ class _ExcludedVideosScreenState extends State<ExcludedVideosScreen> {
   // ── 批量操作 ──
   Future<void> _restoreAll() async {
     final settings = Provider.of<SettingsProvider>(context, listen: false);
-    settings.clearExcludedPaths();
+    // 只恢复当前页面展示的文件（分组页进入时可能只是全部已排除文件的一部分）
+    settings.removeExcludedPaths(_excludedItems.map((e) => e.path).toList());
     setState(() => _excludedItems.clear());
     _showSnack(AppLocalizations.of(context).allVideosRestored);
   }
@@ -220,7 +257,7 @@ class _ExcludedVideosScreenState extends State<ExcludedVideosScreen> {
       return;
     }
     final settings = Provider.of<SettingsProvider>(context, listen: false);
-    settings.clearExcludedPaths();
+    settings.removeExcludedPaths(paths);
     setState(() => _excludedItems.clear());
     _showSnack(AppLocalizations.of(context).deletedAllToTrash);
   }
@@ -240,7 +277,7 @@ class _ExcludedVideosScreenState extends State<ExcludedVideosScreen> {
       return;
     }
     final settings = Provider.of<SettingsProvider>(context, listen: false);
-    settings.clearExcludedPaths();
+    settings.removeExcludedPaths(items.map((e) => e.path).toList());
     setState(() => _excludedItems.clear());
     _showSnack(AppLocalizations.of(context).movedAllTo);
   }
@@ -279,7 +316,7 @@ class _ExcludedVideosScreenState extends State<ExcludedVideosScreen> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: Text(loc.excludedFolder),
+          title: Text(widget.folderName ?? loc.excludedFolder),
           centerTitle: true,
           backgroundColor: const Color(0xFF16213e),
           actions: [

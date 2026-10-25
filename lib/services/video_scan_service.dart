@@ -8,15 +8,30 @@ import 'package:steam_flow/services/video_thumbnail_service.dart';
 /// 视频扫描与元数据读取服务
 class VideoScanService {
   /// 扫描文件夹中的视频（Android 走 MediaStore，桌面走文件系统）
+  ///
+  /// 扫描结果会剔除 [SettingsProvider.excludedPaths] 中记录的视频：
+  /// 排除操作只是把路径记进设置，若不在扫描时过滤，退出页面重新进入后
+  /// 被排除的视频会再次出现。
   static Future<List<VideoItem>> scanFolder(
     String folderPath,
     SettingsProvider settings,
   ) async {
+    // Windows 文件路径不区分大小写，统一转小写比较，避免因大小写差异漏过滤
+    final excluded = {
+      for (final path in settings.excludedPaths)
+        Platform.isWindows ? path.toLowerCase() : path,
+    };
+    bool notExcluded(VideoItem item) => !excluded.contains(
+      Platform.isWindows ? item.path.toLowerCase() : item.path,
+    );
+
     // Android 端通过 MediaStore 查询（绕过 Scoped Storage 限制）
     if (Platform.isAndroid) {
       // MediaStore 已索引好宽高，直接透传，调用方无需再取首帧
       final videos = await MediaStoreService.getFolderVideos(folderPath);
-      return videos.where((item) => isSupportedVideoPath(item.path)).toList();
+      return videos
+          .where((item) => isSupportedVideoPath(item.path) && notExcluded(item))
+          .toList();
     }
 
     // 桌面端使用文件系统 API
@@ -56,7 +71,7 @@ class VideoScanService {
         ),
       );
     }
-    return items;
+    return items.where(notExcluded).toList();
   }
 
   /// 批量读取视频宽高比（宽/高），无法取帧的项为 null。

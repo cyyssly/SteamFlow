@@ -74,16 +74,14 @@ class AppLocalizations {
   // 首页
   String get startPlay => _t('开始播放', 'Start', '開始播放');
   String get selectAlbum => _t('选择相册', 'Albums', '選擇相冊');
-  String get selectFolder => _t('选择文件夹', 'Folders', '選擇文件夾');
+  String get selectVideos => _t('选择视频', 'Videos', '選擇視頻');
   String get settings => _t('设置', 'Settings', '設置');
   String get scanning => _t('正在扫描视频...', 'Scanning...', '正在掃描視頻...');
 
   // 相册选择页
   String get selectAlbumTitle => _t('选择相册', 'Albums', '選擇相冊');
-  String get selectFolderTitle => _t('选择文件夹', 'Folders', '選擇文件夾');
   String get addAlbum => _t('添加相册', 'Add Album', '添加相冊');
   String get addFolder => _t('添加文件夹', 'Add Folder', '添加文件夾');
-  String get excludeAll => _t('全部排除', 'Exclude All', '全部排除');
   String get playFolder => _t('播放此文件夹', 'Play This Folder', '播放此資料夾');
   String get pleaseAddAlbum => _t('请添加相册', 'Add Albums', '請添加相冊');
   String get pleaseAddFolder => _t('请添加文件夹', 'Add Folders', '請添加文件夾');
@@ -237,8 +235,6 @@ class AppLocalizations {
       _t('需要存储权限才能读取视频', 'Storage permission required', '需要存儲權限才能讀取視頻');
   String videosTotal(int c) => _t('共 $c 个视频', '$c videos', '共 $c 個視頻');
   String videosCount(int c) => _t('$c 个视频', '$c videos', '$c 個視頻');
-  String includesVideos(int c) =>
-      _t('包含 $c 个视频', 'Includes $c videos', '包含 $c 個視頻');
   String filesCount(int c) => _t('包含$c个文件', '$c files', '包含$c個文件');
   String folderContentCount(int subfolders, int files) => _t(
     '包含$subfolders个子文件夹，共$files个文件',
@@ -270,6 +266,11 @@ class AppLocalizations {
   String get moveTo => _t('移动到', 'Move To', '移動到');
   String get copyTo => _t('复制到', 'Copy To', '複製到');
   String get restore => _t('恢复', 'Restore', '恢復');
+  String get restoreFiles =>
+      _t('恢复此文件夹的文件', 'Restore Files in Folder', '恢復此文件夾的文件');
+  String get deleteFiles =>
+      _t('删除此文件夹的文件', 'Delete Files in Folder', '刪除此文件夾的文件');
+  String get removeFromManage => _t('从管理移除', 'Remove from List', '從管理移除');
   String get deleteAll => _t('删除全部', 'Delete All', '刪除全部');
   String get moveAllTo => _t('全部移动到', 'Move All To', '全部移動到');
   String get copyAllTo => _t('全部复制到', 'Copy All To', '全部複製到');
@@ -291,6 +292,9 @@ class AppLocalizations {
   String get sortNewest => _t('最新', 'Newest', '最新');
   String get sortOldest => _t('最旧', 'Oldest', '最舊');
   String get sortRandom => _t('随机', 'Random', '隨機');
+  String get sortBy => _t('排序', 'Sort', '排序');
+  String get largestFirst => _t('由大到小', 'Largest First', '由大到小');
+  String get smallestFirst => _t('由小到大', 'Smallest First', '由小到大');
 
   // 帮助页
   String get help => _t('帮助', 'Help', '幫助');
@@ -387,6 +391,32 @@ class AppLocalizations {
     'Shows file name, size, resolution and index, with auto-hide',
     '可顯示檔案名稱、大小、解析度與序號，並支援自動隱藏',
   );
+  String get helpSort => _t(
+    '瀑布流右上角可切换排序：名称、时间、大小、随机与新视频优先；每个文件夹会记住上次选择',
+    'Sort by name, time, size, random or new-first from the grid menu; each folder remembers its choice',
+    '瀑布流右上角可切換排序：名稱、時間、大小、隨機與新視頻優先；每個文件夾會記住上次選擇',
+  );
+  String get helpGroupLan => _t('内网共享', 'LAN Sharing', '內網共享');
+  String get helpLanShare => _t(
+    '开启共享后，同一局域网内的其他设备可浏览本机共享文件夹中的视频；两端需使用兼容的 SteamFlow 版本',
+    'Enable sharing to let other devices on the same LAN browse your shared folders; both sides must run a compatible SteamFlow version',
+    '開啟共享後，同一局域網內的其他設備可瀏覽本機共享文件夾中的視頻；兩端需使用兼容的 SteamFlow 版本',
+  );
+  String get helpLanPermissions => _t(
+    '可分别允许对方远程排除播放、复制视频；两项权限默认关闭',
+    'You can allow remote exclude and remote copy separately; both are off by default',
+    '可分別允許對方遠程排除播放、複製視頻；兩項權限預設關閉',
+  );
+  String get helpLanCopy => _t(
+    '远程视频支持复制到本地，可随时取消；中断后再次复制会从断点续传，远端文件变化时会自动重下，避免文件损坏',
+    'Remote videos can be copied locally and cancelled at any time; interrupted copies resume, and changed remote files restart automatically to avoid corruption',
+    '遠程視頻支持複製到本地，可隨時取消；中斷後再次複製會從斷點續傳，遠端文件變化時會自動重下，避免文件損壞',
+  );
+  String get helpLanTray => _t(
+    'Windows 端可开启「关闭时最小化到托盘」，关闭窗口后共享服务继续在后台运行',
+    'On Windows, enable “Minimize to Tray on Close” to keep sharing in the background after closing the window',
+    'Windows 端可開啟「關閉時最小化到托盤」，關閉窗口後共享服務繼續在後台運行',
+  );
   String get helpVersionLabel => _t('版本', 'Version', '版本');
   String get helpGitHub =>
       _t('GitHub 项目主页', 'GitHub Repository', 'GitHub 專案主頁');
@@ -396,6 +426,122 @@ class AppLocalizations {
     '本應用完全免費、無廣告，如果它幫到了你，歡迎贊助支持。',
   );
   String get helpSponsorButton => _t('打开赞助页面', 'Open Sponsor Page', '打開贊助頁面');
+
+  // ── 内网共享 ──
+  String get lanSharePageTitle => _t('内网共享', 'LAN Sharing', '內網共享');
+  String get lanShareTitle => _t('共享本机视频', 'Share This Device', '共享本機視頻');
+  String get lanShareDesc => _t(
+    '允许同一局域网内的设备浏览并播放所选文件夹中的视频',
+    'Let devices on the same LAN browse and play videos in selected folders',
+    '允許同一局域網內的設備瀏覽並播放所選文件夾中的視頻',
+  );
+  String get lanShareFolderSwitchHint =>
+      _t('选择要共享的文件夹', 'Choose folders to share', '選擇要共享的文件夾');
+  String get localFoldersSection => _t('本地文件夹', 'Local Folders', '本地文件夾');
+  String get playLocalFolders =>
+      _t('播放全部本地文件夹', 'Play all local folders', '播放全部本地文件夾');
+  String get playSharedFolders =>
+      _t('播放全部共享文件夹', 'Play all shared folders', '播放全部共享文件夾');
+  String get addShareSource => _t('添加共享源', 'Add Shared Source', '添加共享源');
+  String get lanSelectSharedFoldersHint =>
+      _t('选择要添加的共享文件夹', 'Select shared folders to add', '選擇要添加的共享文件夾');
+  String lanLocalAddressWith(String addresses) =>
+      _t('本机地址：$addresses', 'Local address: $addresses', '本機地址：$addresses');
+  String get lanShareKeepAwakeHint => _t(
+    '停留在该页面时手机会保持常亮，以便其他终端读取播放本机共享的文件',
+    'The screen stays awake while this page is open so other devices can read your shared files',
+    '停留在該頁面時手機會保持常亮，以便其他終端讀取播放本機共享的文件',
+  );
+  String get lanShareBatteryHint => _t(
+    '如果觉得屏幕常亮太耗电，可以返回主界面或手动关屏；这些操作可能导致断连，具体情况与手机品牌和省电策略相关。',
+    'If keep-awake drains too much battery, you can return to the home screen or turn off the screen. Either may cause a disconnect; behavior depends on your phone brand and power-saving policy.',
+    '如果覺得屏幕常亮太耗電，可以返回主界面或手動關屏；這些操作可能導致斷連，具體情況與手機品牌和省電策略相關。',
+  );
+  String get lanServerStartFailed => _t(
+    '共享服务启动失败，请检查网络或端口占用',
+    'Failed to start sharing; check the network or port usage',
+    '共享服務啟動失敗，請檢查網絡或端口佔用',
+  );
+  String get allowRemoteExcludeLabel =>
+      _t('允许远程排除播放', 'Allow Remote Exclude', '允許遠端排除播放');
+  String get allowRemoteExcludeDesc => _t(
+    '允许其他设备把这里的视频加入本机排除列表（不删除文件）',
+    'Allow other devices to exclude videos from this device\'s playlist (files are kept)',
+    '允許其他設備把這裡的視頻加入本機排除列表（不刪除檔案）',
+  );
+  String get allowRemoteCopyLabel =>
+      _t('允许远程复制', 'Allow Remote Copy', '允許遠端複製');
+  String get allowRemoteCopyDesc => _t(
+    '允许其他设备把这里的视频复制到它自己的设备',
+    'Allow other devices to copy videos from this device',
+    '允許其他設備把這裡的視頻複製到它自己的設備',
+  );
+  String get lanNoDevices => _t('未发现内网设备', 'No devices found', '未發現內網設備');
+  String get lanManualAdd => _t('手动添加设备', 'Add Device Manually', '手動添加設備');
+  String get lanManualHint =>
+      _t('输入 IP 或 IP:端口', 'Enter IP or IP:port', '輸入 IP 或 IP:端口');
+  String get lanInvalidAddress =>
+      _t('地址无效或设备不可达', 'Invalid address or device unreachable', '地址無效或設備不可達');
+  String get lanSelfDevice =>
+      _t('这是本机设备', 'This is the current device', '這是本機設備');
+  String lanSharedFoldersCount(int count) =>
+      _t('共享 $count 个文件夹', '$count shared folders', '共享 $count 個文件夾');
+  String lanVideoCount(int count) =>
+      _t('$count 个视频', '$count videos', '$count 個視頻');
+  String get lanNoFolders =>
+      _t('对方没有共享任何文件夹', 'The device shares no folders', '對方沒有共享任何文件夾');
+  String get lanLoadFailed => _t(
+    '加载失败，请确认设备在线',
+    'Load failed. Check the device is online',
+    '加載失敗，請確認設備在線',
+  );
+  String get lanRefresh => _t('刷新', 'Refresh', '刷新');
+  String get lanCancel => _t('取消', 'Cancel', '取消');
+  String get lanAdd => _t('添加', 'Add', '添加');
+  String get lanRetry => _t('重试', 'Retry', '重試');
+  String get lanRemove => _t('移除', 'Remove', '移除');
+  String get lanAddSource => _t('添加共享源', 'Add Shared Source', '添加共享源');
+  String get lanAdded => _t('已添加共享源', 'Shared source added', '已添加共享源');
+  String get sharedFoldersSection => _t('共享文件夹', 'Shared Folders', '共享文件夾');
+  String get lanReconnectFolder => _t('重新连接', 'Reconnect', '重新連接');
+  String get lanReconnectAll => _t('重新连接全部', 'Reconnect all', '重新連接全部');
+  String get lanRemoteUnsupported => _t(
+    '远程视频暂不支持该操作',
+    'This action is not supported for remote videos yet',
+    '遠程視頻暫不支持該操作',
+  );
+  String get lanCopyToLocal => _t('复制到本地', 'Copy to Local', '複製到本機');
+  String get lanCopied => _t('已复制到本地', 'Copied', '已複製到本機');
+  String get lanCopyFailed => _t('复制失败', 'Copy failed', '複製失敗');
+  String get lanRemotePermissionDenied => _t(
+    '对方未开启该权限',
+    'The other device has not enabled this permission',
+    '對方未開啟該權限',
+  );
+  String get lanRemoteExcludeFailed => _t(
+    '远程排除失败，请确认对方已开启该权限',
+    'Remote exclude failed; make sure it is enabled on the sharing device',
+    '遠程排除失敗，請確認對方已開啟該權限',
+  );
+  String get lanCopying => _t('正在复制…', 'Copying…', '正在複製…');
+  String get lanCopyCancelled => _t('已取消复制', 'Copy cancelled', '已取消複製');
+  String get lanCopyBusy =>
+      _t('已有复制任务进行中', 'A copy task is already running', '已有複製任務進行中');
+  String get lastCopyDestination =>
+      _t('上次使用的目录', 'Last used folder', '上次使用的目錄');
+  String get changeDestination => _t('更改目录', 'Change Folder', '更改目錄');
+  String get startCopy => _t('开始复制', 'Start Copy', '開始複製');
+
+  // 桌面端托盘
+  String get trayShowWindow => _t('显示主界面', 'Show Window', '顯示主界面');
+  String get trayExit => _t('退出 SteamFlow', 'Exit SteamFlow', '退出 SteamFlow');
+  String get closeToTray =>
+      _t('关闭时最小化到托盘', 'Minimize to Tray on Close', '關閉時最小化到托盤');
+  String get closeToTrayDesc => _t(
+    '关闭窗口时收起到系统托盘继续运行，以便其他内网终端浏览本机视频',
+    'Keep running in the system tray when the window is closed so other LAN devices can keep browsing your videos',
+    '關閉窗口時收起到系統托盤繼續運行，以便其他內網終端瀏覽本機視頻',
+  );
 
   // 内部翻译方法
   String _t(String zhCN, String en, String zhTW) {

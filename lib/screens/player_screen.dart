@@ -7,10 +7,15 @@ import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:provider/provider.dart';
+import 'package:steam_flow/models/lan_models.dart';
+import 'package:steam_flow/models/video_item.dart';
+import 'package:steam_flow/providers/lan_provider.dart';
 import 'package:steam_flow/providers/slide_provider.dart';
 import 'package:steam_flow/providers/settings_provider.dart';
 import 'package:steam_flow/l10n/app_localizations.dart';
 import 'package:steam_flow/services/fullscreen_service.dart';
+import 'package:steam_flow/services/lan_client_service.dart';
+import 'package:steam_flow/services/remote_copy_service.dart';
 import 'package:steam_flow/utils/rotated_fit.dart';
 import 'package:vector_math/vector_math_64.dart' as vector;
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -30,6 +35,19 @@ class _PlayerScreenState extends State<PlayerScreen>
   // ==================== 播放内核 ====================
   late final Player _player;
   late final VideoController _videoController;
+
+  /// 全局唯一的活动播放器。
+  ///
+  /// 正常路径下每个播放页都会在 [dispose] 里销毁自己的播放器；但若某条退出
+  /// 路径没能及时销毁页面（例如路由被保留），旧播放器会继续在后台出声。
+  /// 新播放页创建播放器时先销毁上一个实例，保证同时只有一个视频在播放。
+  static Player? _activePlayer;
+
+  /// 缓存的播放列表中枢：路由弹出回调与 dispose 中不能再可靠地查找 Provider。
+  late final SlideProvider _slideProvider;
+
+  /// 本次退出是否已经停过播放，避免退出路径与路由弹出回调重复触发停止。
+  bool _stoppedForExit = false;
 
   /// 由播放器事件流维护的状态快照
   bool _playing = false;
@@ -214,6 +232,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     super.initState();
     final settings = Provider.of<SettingsProvider>(context, listen: false);
     final slideProvider = Provider.of<SlideProvider>(context, listen: false);
+    _slideProvider = slideProvider;
 
     // 播放时保持屏幕常亮，避免进入省电模式自动熄屏
     WakelockPlus.enable();
@@ -228,6 +247,14 @@ class _PlayerScreenState extends State<PlayerScreen>
     _transitionController = AnimationController(vsync: this);
     _volume = _player.state.volume;
     _listenPlayer();
+
+    // 兜底：上一个播放器若因页面未销毁而残留，先销毁它，避免旧视频与
+    // 新视频同时出声（表现为「点开其他视频也打断不了原来的播放」）。
+    final previousPlayer = _activePlayer;
+    _activePlayer = _player;
+    if (previousPlayer != null) {
+      unawaited(_disposePlayerQuietly(previousPlayer));
+    }
 
     // 初始化最近一次设置快照，避免首帧误判为设置变更
     _lastOrientation = settings.videoOrientation;
@@ -266,6 +293,22 @@ class _PlayerScreenState extends State<PlayerScreen>
       // 在播放状态确定后再设置自动隐藏
       _hideControlsDelayed();
       _hideInfoDelayed();
+
+      // 远端视频：确认共享终端当前开放的操作权限，决定工具栏按钮
+      final current = slideProvider.videos.isEmpty
+          ? null
+          : slideProvider.videos[slideProvider.currentIndex];
+      if (current != null && current.isRemote) {
+        final device = _deviceForRemoteItem(current);
+        if (device != null) {
+          unawaited(
+            Provider.of<LanProvider>(
+              context,
+              listen: false,
+            ).refreshCapabilities(device),
+          );
+        }
+      }
     });
   }
 
@@ -324,7 +367,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     setState(() => _completed = true);
 
     final slideProvider = Provider.of<SlideProvider>(context, listen: false);
-    final isRandom = settings.playOrder == PlayOrder.random;
+    // 从瀑布流进入时按列表既有顺序（即其当前排序）播放，忽略设置页的随机模式
+    final followListOrder = slideProvider.followListOrder;
+    final isRandom = !followListOrder && settings.playOrder == PlayOrder.random;
     // 是否已播到本批次的最后一个。
     // 随机模式是「洗牌后的固定顺序」，末尾即随机序列的最后一个元素。
     final atBatchEnd = isRandom
@@ -375,8 +420,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (!mounted) return;
     final slideProvider = Provider.of<SlideProvider>(context, listen: false);
     if (slideProvider.videos.isEmpty) return;
-    final path = slideProvider.videos[slideProvider.currentIndex].path;
-    if (path != _openPath) {
+    final key = slideProvider.videos[slideProvider.currentIndex].key;
+    if (key != _openPath) {
       _openCurrentVideo();
     } else {
       _syncPlayState();
@@ -391,9 +436,9 @@ class _PlayerScreenState extends State<PlayerScreen>
 
     final index = slideProvider.currentIndex;
     final video = slideProvider.videos[index];
-    if (video.path == _openPath) return;
+    if (video.key == _openPath) return;
 
-    _openPath = video.path;
+    _openPath = video.key;
 
     final durationMs = (settings.animationDuration * 1000).round();
     _transitionController.duration = Duration(milliseconds: durationMs);
@@ -416,7 +461,10 @@ class _PlayerScreenState extends State<PlayerScreen>
     });
 
     _applyPlaylistMode();
-    unawaited(_player.open(Media(video.path), play: slideProvider.isPlaying));
+    // 本机文件用路径、共享视频用 HTTP 地址，media_kit 会自动识别协议
+    unawaited(
+      _player.open(Media(video.playbackUrl), play: slideProvider.isPlaying),
+    );
 
     if (settings.transitionAnimation == TransitionAnimation.none) {
       _transitionController.value = 1.0;
@@ -453,16 +501,23 @@ class _PlayerScreenState extends State<PlayerScreen>
       sub.cancel();
     }
     _playerSubs.clear();
-    Provider.of<SlideProvider>(
-      context,
-      listen: false,
-    ).removeListener(_onSlideChanged);
+    _slideProvider.removeListener(_onSlideChanged);
+    // 退出播放页时复位播放意图，避免回到列表后仍残留「播放中」状态
+    _slideProvider.stopPlay();
 
     _hideControlsTimer?.cancel();
     _hideInfoTimer?.cancel();
 
     _transitionController.dispose();
-    _player.dispose();
+
+    if (identical(_activePlayer, _player)) {
+      _activePlayer = null;
+    }
+
+    // 显式先停一次：Player.dispose 内部的停止动作排在若干异步初始化等待之后，
+    // 页面销毁期间这些等待不保证及时返回，会让原生播放一直在后台继续。
+    unawaited(_player.stop().catchError((_) {}));
+    unawaited(_player.dispose().catchError((_) {}));
 
     // 移除全局键盘监听器
     HardwareKeyboard.instance.removeHandler(_hardwareKeyHandler);
@@ -633,6 +688,58 @@ class _PlayerScreenState extends State<PlayerScreen>
     });
   }
 
+  /// 由远端视频的播放地址还原设备信息（用于排除/复制等远程操作）
+  LanDevice? _deviceForRemoteItem(VideoItem item) {
+    final uri = Uri.tryParse(item.remoteUrl ?? '');
+    if (uri == null) return null;
+    return LanDevice(
+      id: item.deviceId ?? '',
+      name: uri.host,
+      host: uri.host,
+      port: uri.port,
+      folderCount: 0,
+      lastSeen: DateTime.now(),
+    );
+  }
+
+  /// 复制当前远端视频到本机
+  Future<void> _copyCurrentVideo() async {
+    final slideProvider = Provider.of<SlideProvider>(context, listen: false);
+    if (slideProvider.videos.isEmpty) return;
+    final item = slideProvider.videos[slideProvider.currentIndex];
+    if (!item.isRemote) return;
+
+    final loc = AppLocalizations.of(context);
+    if (RemoteCopyService.isCopying) {
+      _showDeleteNotification(loc.lanCopyBusy);
+      return;
+    }
+
+    final destination = await RemoteCopyService.resolveDestination(context);
+    if (!mounted || destination == null) return;
+
+    final status = await RemoteCopyService.copyToLocal(
+      context,
+      item,
+      destination,
+    );
+    if (!mounted) return;
+    switch (status) {
+      case RemoteCopyStatus.success:
+        _showDeleteNotification(loc.lanCopied);
+        break;
+      case RemoteCopyStatus.cancelled:
+        _showDeleteNotification(loc.lanCopyCancelled);
+        break;
+      case RemoteCopyStatus.busy:
+        _showDeleteNotification(loc.lanCopyBusy);
+        break;
+      case RemoteCopyStatus.failed:
+        _showDeleteNotification(loc.lanCopyFailed);
+        break;
+    }
+  }
+
   /// 删除当前视频（[action] 为本次实际使用的删除行为）
   /// 返回 true 表示视频列表不为空，false 表示视频列表为空且已返回主界面
   Future<bool> _deleteCurrentVideo(DeleteAction action) async {
@@ -641,6 +748,54 @@ class _PlayerScreenState extends State<PlayerScreen>
 
     final currentIndex = slideProvider.currentIndex;
     final currentVideo = slideProvider.videos[currentIndex];
+
+    // 共享视频：只能请求共享主机「排除播放」，不能在本机删除或排除
+    if (currentVideo.isRemote) {
+      final loc = AppLocalizations.of(context);
+      if (action != DeleteAction.exclude) {
+        if (mounted) _showDeleteNotification(loc.lanRemoteUnsupported);
+        return false;
+      }
+      final remoteId = currentVideo.remoteId ?? '';
+      final sep = remoteId.indexOf('/');
+      final device = _deviceForRemoteItem(currentVideo);
+      if (sep <= 0 || device == null) {
+        if (mounted) _showDeleteNotification(loc.lanRemoteExcludeFailed);
+        return false;
+      }
+      final lan = Provider.of<LanProvider>(context, listen: false);
+      var capabilities = lan.capabilitiesFor(device.id);
+      if (!capabilities.exclude) {
+        capabilities = await lan.refreshCapabilities(device);
+      }
+      if (!capabilities.exclude) {
+        if (mounted) _showDeleteNotification(loc.lanRemotePermissionDenied);
+        return false;
+      }
+
+      final ok = await LanClientService.instance.excludeVideo(
+        device,
+        folderId: remoteId.substring(0, sep),
+        id: remoteId.substring(sep + 1),
+      );
+      if (!ok) {
+        if (mounted) _showDeleteNotification(loc.lanRemoteExcludeFailed);
+        return false;
+      }
+
+      // 通知远端瀑布流：返回时立即隐藏该条目，避免整页重载
+      lan.markRemoteExcluded(device.id, remoteId);
+
+      slideProvider.removeVideo(currentIndex);
+      if (slideProvider.videos.isEmpty) {
+        // 列表清空后直接返回：先停播放，避免返回过程中原视频还在出声
+        _stopPlaybackForExit();
+        if (mounted) Navigator.pop(context);
+        return false;
+      }
+      if (mounted) _showDeleteNotification(loc.excluded);
+      return true;
+    }
 
     if (action == DeleteAction.delete) {
       // 实际删除文件
@@ -663,6 +818,8 @@ class _PlayerScreenState extends State<PlayerScreen>
 
     // 如果视频列表为空，返回主界面
     if (slideProvider.videos.isEmpty) {
+      // 先停播放，避免返回过程中原视频还在出声
+      _stopPlaybackForExit();
       if (mounted) {
         Navigator.pop(context);
       }
@@ -688,7 +845,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     // 切换后回到「适应屏幕」状态，避免新视频带着上一个的缩放/位移
     _resetZoom();
 
-    if (settings.playOrder == PlayOrder.random) {
+    // 跟随瀑布流顺序时，队列已经是用户看到的顺序，直接按索引推进
+    if (!slideProvider.followListOrder &&
+        settings.playOrder == PlayOrder.random) {
       // 使用预打乱的随机序列进行播放
       slideProvider.nextRandomVideo();
     } else {
@@ -700,14 +859,14 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// 切换到上一个视频。
   void _prevVideo() {
     final settings = Provider.of<SettingsProvider>(context, listen: false);
+    final slideProvider = Provider.of<SlideProvider>(context, listen: false);
 
     // 切换后回到「适应屏幕」状态，避免新视频带着上一个的缩放/位移
     _resetZoom();
 
-    Provider.of<SlideProvider>(
-      context,
-      listen: false,
-    ).prevVideo(playOrder: settings.playOrder);
+    slideProvider.prevVideo(
+      playOrder: slideProvider.followListOrder ? null : settings.playOrder,
+    );
   }
 
   void _hideControlsDelayed() {
@@ -1279,11 +1438,27 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// [Player.dispose] 是异步的，不能保证它来得及在页面切换前停掉原生播放，
   /// 所以退出播放页的每条路径都显式停一次。
   void _stopPlaybackForExit() {
-    final slideProvider = Provider.of<SlideProvider>(context, listen: false);
-    if (slideProvider.isPlaying) {
-      slideProvider.stopPlay();
+    if (_stoppedForExit) return;
+    _stoppedForExit = true;
+    _slideProvider.stopPlay();
+    unawaited(_player.stop().catchError((_) {}));
+  }
+
+  /// 安静地销毁一个可能残留在后台的播放器实例。
+  ///
+  /// 先 stop 再 dispose：stop 能最快让原生层停止出声；即便实例已经销毁，
+  /// 抛出的异常也在这里吞掉，不影响新页面。
+  static Future<void> _disposePlayerQuietly(Player player) async {
+    try {
+      await player.stop();
+    } catch (_) {
+      // 播放器可能已被销毁
     }
-    unawaited(_player.stop());
+    try {
+      await player.dispose();
+    } catch (_) {
+      // 播放器可能已被销毁
+    }
   }
 
   /// 退出播放：停止播放、还原进入播放前的全屏状态，然后返回主界面。
@@ -1460,22 +1635,36 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
-  /// 从缓存取文件大小文本；未缓存时返回占位符并触发异步加载。
+  /// 文件大小文本：本机文件按路径缓存并异步读盘，远端直接使用服务端返回的大小。
   ///
   /// 切勿在 build 中直接读盘/解码，否则每次重建都会阻塞 UI 线程。
-  String _fileSizeLabel(String path) {
-    final cached = _fileSizeCache[path];
+  String _fileSizeLabel(VideoItem item) {
+    if (item.isRemote) return _formatSizeBytes(item.sizeBytes);
+    final cached = _fileSizeCache[item.path];
     if (cached != null) return cached;
-    unawaited(_loadVideoMeta(path));
+    unawaited(_loadVideoMeta(item.path));
     return '…';
   }
 
-  /// 分辨率文本：解码尺寸由播放器事件流提供，未就绪时显示占位符。
-  String _resolutionLabel() {
-    final w = _videoWidth;
-    final h = _videoHeight;
+  /// 分辨率文本：优先用播放器解码出的尺寸；
+  /// 远端在解码就绪前先用列表里带的真实分辨率兜底。
+  String _resolutionLabel(VideoItem item) {
+    final w = _videoWidth ?? item.width;
+    final h = _videoHeight ?? item.height;
     if (w == null || h == null) return '…';
     return '$w x $h';
+  }
+
+  /// 把字节数格式化为 B/KB/MB/GB，未知时显示「未知」。
+  String _formatSizeBytes(int? bytes) {
+    final unknownText = AppLocalizations.of(context).unknown;
+    if (bytes == null || bytes < 0) return unknownText;
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
   }
 
   /// 只在磁盘上读取一次文件大小，结果缓存起来。
@@ -1630,619 +1819,662 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Consumer2<SlideProvider, SettingsProvider>(
-      builder: (context, slideProvider, settings, child) {
-        // 检测设置变更并即时应用运行时效果（方向、自动隐藏、循环模式等）
-        _applySettingsToPlayback(settings);
+    return PopScope(
+      // 系统返回键 / 返回手势：路由弹出时立即停止播放。
+      // 只依赖 dispose 时，停止动作可能在页面切换动画之后才生效，
+      // 表现为退出播放页后声音仍在继续。
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) _stopPlaybackForExit();
+      },
+      child: Consumer2<SlideProvider, SettingsProvider>(
+        builder: (context, slideProvider, settings, child) {
+          // 检测设置变更并即时应用运行时效果（方向、自动隐藏、循环模式等）
+          _applySettingsToPlayback(settings);
 
-        if (slideProvider.videos.isEmpty) {
+          if (slideProvider.videos.isEmpty) {
+            return Scaffold(
+              backgroundColor: settings.background,
+              body: Center(child: Text(AppLocalizations.of(context).noVideos)),
+            );
+          }
+
+          final loc = AppLocalizations.of(context);
+          final currentItem = slideProvider.videos[slideProvider.currentIndex];
+          // 远端视频可执行的操作由共享终端当前开放的权限决定；
+          // 用 record 作为 select 的键，避免（不可比较的）对象每次通知都触发重建
+          final remoteActions = currentItem.isRemote
+              ? context.select<LanProvider, (bool, bool)>((lan) {
+                  final caps = lan.capabilitiesFor(currentItem.deviceId ?? '');
+                  return (caps.exclude, caps.copy);
+                })
+              : (false, false);
+
           return Scaffold(
             backgroundColor: settings.background,
-            body: Center(child: Text(AppLocalizations.of(context).noVideos)),
-          );
-        }
-
-        return Scaffold(
-          backgroundColor: settings.background,
-          body: Focus(
-            autofocus: true,
-            child: Listener(
-              onPointerSignal: _handleScroll,
-              // 鼠标悬停移动（未按键）也算一次操作，顺延工具栏自动隐藏计时
-              onPointerHover: (_) => _onPointerHoverActivity(),
-              // 用于“完全松手”才恢复工具栏：GestureDetector 的 onScaleEnd
-              // 无法覆盖“双指后先抬一根手指、另一根继续停住”的情形。
-              onPointerDown: (event) {
-                if (_pointerCount == 0) {
-                  // 新一轮交互开始，重置手势判定标志
-                  // （点按按钮等情形不会走到 onScaleStart）
-                  _gestureMoved = false;
-                  _gesturePinched = false;
-                  _gestureTravel = 0.0;
-                  _multiPointerUsed = false;
-                  _secondaryButtonUsed = false;
-                  // 记下落点，松手时据此区分“点画面”与“点工具栏按钮”
-                  _pointerDownPosition = event.position;
-                }
-                // 右键用于呼出小菜单，标记后松手时不当作“轻点画面”
-                if (event.kind == PointerDeviceKind.mouse &&
-                    event.buttons == kSecondaryMouseButton) {
-                  _secondaryButtonUsed = true;
-                }
-                _pointerCount++;
-                if (_pointerCount > 1) _multiPointerUsed = true;
-              },
-              onPointerUp: _handlePointerUp,
-              onPointerCancel: _handlePointerCancel,
-              child: LayoutBuilder(
-                // 视频以 Stack 铺满整个 body，因此用它的约束尺寸作为
-                // 缩放/平移的视口尺寸，不再于 build 期间写入实例字段。
-                builder: (context, constraints) {
-                  // 仅在约束有限且非空时缓存；写入实例字段不会触发重建
-                  final viewport = constraints.biggest;
-                  if (viewport.isFinite && !viewport.isEmpty) {
-                    _viewportSizeCache = viewport;
+            body: Focus(
+              autofocus: true,
+              child: Listener(
+                onPointerSignal: _handleScroll,
+                // 鼠标悬停移动（未按键）也算一次操作，顺延工具栏自动隐藏计时
+                onPointerHover: (_) => _onPointerHoverActivity(),
+                // 用于“完全松手”才恢复工具栏：GestureDetector 的 onScaleEnd
+                // 无法覆盖“双指后先抬一根手指、另一根继续停住”的情形。
+                onPointerDown: (event) {
+                  if (_pointerCount == 0) {
+                    // 新一轮交互开始，重置手势判定标志
+                    // （点按按钮等情形不会走到 onScaleStart）
+                    _gestureMoved = false;
+                    _gesturePinched = false;
+                    _gestureTravel = 0.0;
+                    _multiPointerUsed = false;
+                    _secondaryButtonUsed = false;
+                    // 记下落点，松手时据此区分“点画面”与“点工具栏按钮”
+                    _pointerDownPosition = event.position;
                   }
-                  return GestureDetector(
-                    key: _gestureKey,
-                    behavior: HitTestBehavior.opaque,
-                    // 注意：不要用 onTapDown 触发工具栏！
-                    // onTapDown 在“手指刚按下”就会触发（即使随后变成缩放/拖动），
-                    // 于是每次双指缩放都会弹出工具栏。
-                    // 这里也不注册 onTap：统一由外层 Listener 在“所有手指抬起”时
-                    // 判定本次是否只是轻点（见 _onAllPointersReleased）。
-                    //
-                    // 只注册缩放识别器、不注册横向拖拽识别器：
-                    // 框架断言明确指出“scale 是 pan 的超集”，且拖拽的认定阈值
-                    // （kTouchSlop 18）小于缩放的平移阈值（kPanSlop 36），
-                    // 两者共存时单指拖动必被拖拽抢走、双指捏合也可能失效。
-                    // 统一交给缩放识别器后，按主轴在代码里分派：
-                    //   · 未放大 + 横向 → 拖动进度条（见 _handleScaleUpdate/End）
-                    //   · 未放大 + 纵向 → 上滑下一个 / 下滑上一个
-                    //   · 已放大        → 单指拖动平移 + 顶到边缘继续外推切换
-                    onScaleStart: _handleScaleStart,
-                    onScaleUpdate: _handleScaleUpdate,
-                    onScaleEnd: _handleScaleEnd,
-                    onSecondaryTapUp: (details) =>
-                        _showVideoContextMenu(details.globalPosition),
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        _buildTransitionAnimation(
-                          Transform(
-                            alignment: Alignment.center,
-                            // 顺序很重要：Matrix4 的方法是在右侧相乘，
-                            // 因此 M = T · S。平移在最外层，_position 才是纯屏幕
-                            // 像素，与 [_clamp] 的边界计算保持一致；
-                            // 若把 translate 写在最后（M = S · T），位移会被缩放放大。
-                            //
-                            // 旋转不放在这里：Transform 只在绘制阶段旋转，会把
-                            // 「已按视口适配好的整块区域」连黑边一起转过来，导致
-                            // contain 下旋转 90° 后四周都是黑边、短边填不满。
-                            // 旋转改由下面的 RotatedBox 在布局阶段完成。
-                            transform: Matrix4.identity()
-                              ..translateByVector3(
-                                vector.Vector3(_position.dx, _position.dy, 0),
-                              )
-                              ..scaleByVector3(
-                                vector.Vector3(_scale, _scale, _scale),
-                              ),
-                            child: SizedBox.expand(
-                              child: RotatedBox(
-                                // 布局阶段旋转：RotatedBox 会把父级约束沿对角翻转
-                                // 后再交给视频适配，于是 contain 的短边能真正贴满
-                                // 屏幕短边（与 [_displayBaseSize] 的算法一致）。
-                                quarterTurns: _quarterTurns,
-                                child: Video(
-                                  controller: _videoController,
-                                  fit: settings.boxFit,
-                                  fill: settings.background,
-                                  // 播放控制由本页自己的工具栏负责，
-                                  // 关闭 media_kit 自带控件避免重复。
-                                  controls: null,
-                                  // 常亮已由本页的 WakelockPlus 统一管理。
-                                  wakelock: false,
+                  // 右键用于呼出小菜单，标记后松手时不当作“轻点画面”
+                  if (event.kind == PointerDeviceKind.mouse &&
+                      event.buttons == kSecondaryMouseButton) {
+                    _secondaryButtonUsed = true;
+                  }
+                  _pointerCount++;
+                  if (_pointerCount > 1) _multiPointerUsed = true;
+                },
+                onPointerUp: _handlePointerUp,
+                onPointerCancel: _handlePointerCancel,
+                child: LayoutBuilder(
+                  // 视频以 Stack 铺满整个 body，因此用它的约束尺寸作为
+                  // 缩放/平移的视口尺寸，不再于 build 期间写入实例字段。
+                  builder: (context, constraints) {
+                    // 仅在约束有限且非空时缓存；写入实例字段不会触发重建
+                    final viewport = constraints.biggest;
+                    if (viewport.isFinite && !viewport.isEmpty) {
+                      _viewportSizeCache = viewport;
+                    }
+                    return GestureDetector(
+                      key: _gestureKey,
+                      behavior: HitTestBehavior.opaque,
+                      // 注意：不要用 onTapDown 触发工具栏！
+                      // onTapDown 在“手指刚按下”就会触发（即使随后变成缩放/拖动），
+                      // 于是每次双指缩放都会弹出工具栏。
+                      // 这里也不注册 onTap：统一由外层 Listener 在“所有手指抬起”时
+                      // 判定本次是否只是轻点（见 _onAllPointersReleased）。
+                      //
+                      // 只注册缩放识别器、不注册横向拖拽识别器：
+                      // 框架断言明确指出“scale 是 pan 的超集”，且拖拽的认定阈值
+                      // （kTouchSlop 18）小于缩放的平移阈值（kPanSlop 36），
+                      // 两者共存时单指拖动必被拖拽抢走、双指捏合也可能失效。
+                      // 统一交给缩放识别器后，按主轴在代码里分派：
+                      //   · 未放大 + 横向 → 拖动进度条（见 _handleScaleUpdate/End）
+                      //   · 未放大 + 纵向 → 上滑下一个 / 下滑上一个
+                      //   · 已放大        → 单指拖动平移 + 顶到边缘继续外推切换
+                      onScaleStart: _handleScaleStart,
+                      onScaleUpdate: _handleScaleUpdate,
+                      onScaleEnd: _handleScaleEnd,
+                      onSecondaryTapUp: (details) =>
+                          _showVideoContextMenu(details.globalPosition),
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          _buildTransitionAnimation(
+                            Transform(
+                              alignment: Alignment.center,
+                              // 顺序很重要：Matrix4 的方法是在右侧相乘，
+                              // 因此 M = T · S。平移在最外层，_position 才是纯屏幕
+                              // 像素，与 [_clamp] 的边界计算保持一致；
+                              // 若把 translate 写在最后（M = S · T），位移会被缩放放大。
+                              //
+                              // 旋转不放在这里：Transform 只在绘制阶段旋转，会把
+                              // 「已按视口适配好的整块区域」连黑边一起转过来，导致
+                              // contain 下旋转 90° 后四周都是黑边、短边填不满。
+                              // 旋转改由下面的 RotatedBox 在布局阶段完成。
+                              transform: Matrix4.identity()
+                                ..translateByVector3(
+                                  vector.Vector3(_position.dx, _position.dy, 0),
+                                )
+                                ..scaleByVector3(
+                                  vector.Vector3(_scale, _scale, _scale),
                                 ),
-                              ),
-                            ),
-                          ),
-                        ),
-                        // 播放错误提示（解码失败等）
-                        if (_playbackError != null)
-                          Center(
-                            child: Text(
-                              AppLocalizations.of(context).videoLoadFailed,
-                              style: const TextStyle(color: Colors.white70),
-                            ),
-                          ),
-                        // 缓冲中提示
-                        if (_buffering && _playbackError == null)
-                          const Center(
-                            child: SizedBox(
-                              width: 48,
-                              height: 48,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 3,
-                                color: Colors.white70,
-                              ),
-                            ),
-                          ),
-                        if (_showControls)
-                          Positioned(
-                            top: 0,
-                            left: 0,
-                            right: 0,
-                            child: AppBar(
-                              key: _topControlsKey,
-                              backgroundColor: Colors.black.withValues(
-                                alpha: 0.5,
-                              ),
-                              title: Text(
-                                '${slideProvider.currentIndex + 1} / ${slideProvider.videos.length}',
-                                style: const TextStyle(fontSize: 16),
-                              ),
-                              leading: Tooltip(
-                                message: AppLocalizations.of(context).back,
-                                child: IconButton(
-                                  icon: const Icon(Icons.arrow_back),
-                                  onPressed: () {
-                                    // 先停掉播放，再还原进入播放前的全屏状态；
-                                    // 延迟一小段时间让窗口状态稳定
-                                    _stopPlaybackForExit();
-                                    _restoreFullscreenBeforePlayback();
-                                    final navigator = Navigator.of(context);
-                                    Future.delayed(
-                                      const Duration(milliseconds: 200),
-                                      () {
-                                        if (mounted) navigator.pop();
-                                      },
-                                    );
-                                  },
-                                ),
-                              ),
-                              actions: [
-                                // 全屏/退出全屏按钮仅在 Windows 桌面端显示
-                                // （手机端播放本身即全屏，无需切换）
-                                if (Platform.isWindows)
-                                  Tooltip(
-                                    message: _isFullscreen
-                                        ? AppLocalizations.of(
-                                            context,
-                                          ).exitFullscreen
-                                        : AppLocalizations.of(
-                                            context,
-                                          ).enterFullscreen,
-                                    child: IconButton(
-                                      icon: Icon(
-                                        _isFullscreen
-                                            ? Icons.fullscreen_exit
-                                            : Icons.fullscreen,
-                                      ),
-                                      onPressed: _isFullscreen
-                                          ? _exitFullscreen
-                                          : _enterFullscreen,
-                                    ),
+                              child: SizedBox.expand(
+                                child: RotatedBox(
+                                  // 布局阶段旋转：RotatedBox 会把父级约束沿对角翻转
+                                  // 后再交给视频适配，于是 contain 的短边能真正贴满
+                                  // 屏幕短边（与 [_displayBaseSize] 的算法一致）。
+                                  quarterTurns: _quarterTurns,
+                                  child: Video(
+                                    controller: _videoController,
+                                    fit: settings.boxFit,
+                                    fill: settings.background,
+                                    // 播放控制由本页自己的工具栏负责，
+                                    // 关闭 media_kit 自带控件避免重复。
+                                    controls: null,
+                                    // 常亮已由本页的 WakelockPlus 统一管理。
+                                    wakelock: false,
                                   ),
-                                // 循环播放与音量按钮已移到下方播放工具栏
-                                Tooltip(
-                                  message:
-                                      settings.deleteAction ==
-                                          DeleteAction.exclude
-                                      ? AppLocalizations.of(
-                                          context,
-                                        ).excludeFromPlay
-                                      : AppLocalizations.of(
-                                          context,
-                                        ).deleteFileLabel,
+                                ),
+                              ),
+                            ),
+                          ),
+                          // 播放错误提示（解码失败等）
+                          if (_playbackError != null)
+                            Center(
+                              child: Text(
+                                AppLocalizations.of(context).videoLoadFailed,
+                                style: const TextStyle(color: Colors.white70),
+                              ),
+                            ),
+                          // 缓冲中提示
+                          if (_buffering && _playbackError == null)
+                            const Center(
+                              child: SizedBox(
+                                width: 48,
+                                height: 48,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 3,
+                                  color: Colors.white70,
+                                ),
+                              ),
+                            ),
+                          if (_showControls)
+                            Positioned(
+                              top: 0,
+                              left: 0,
+                              right: 0,
+                              child: AppBar(
+                                key: _topControlsKey,
+                                backgroundColor: Colors.black.withValues(
+                                  alpha: 0.5,
+                                ),
+                                title: Text(
+                                  '${slideProvider.currentIndex + 1} / ${slideProvider.videos.length}',
+                                  style: const TextStyle(fontSize: 16),
+                                ),
+                                leading: Tooltip(
+                                  message: AppLocalizations.of(context).back,
                                   child: IconButton(
-                                    icon: Icon(
-                                      settings.deleteAction ==
-                                              DeleteAction.exclude
-                                          ? Icons.block
-                                          : Icons.delete,
-                                      color:
+                                    icon: const Icon(Icons.arrow_back),
+                                    onPressed: _exitPlayback,
+                                  ),
+                                ),
+                                actions: [
+                                  // 全屏/退出全屏按钮仅在 Windows 桌面端显示
+                                  // （手机端播放本身即全屏，无需切换）
+                                  if (Platform.isWindows)
+                                    Tooltip(
+                                      message: _isFullscreen
+                                          ? AppLocalizations.of(
+                                              context,
+                                            ).exitFullscreen
+                                          : AppLocalizations.of(
+                                              context,
+                                            ).enterFullscreen,
+                                      child: IconButton(
+                                        icon: Icon(
+                                          _isFullscreen
+                                              ? Icons.fullscreen_exit
+                                              : Icons.fullscreen,
+                                        ),
+                                        onPressed: _isFullscreen
+                                            ? _exitFullscreen
+                                            : _enterFullscreen,
+                                      ),
+                                    ),
+                                  // 远端视频：按共享终端开放的权限显示「排除 / 复制」
+                                  if (currentItem.isRemote && remoteActions.$1)
+                                    Tooltip(
+                                      message: loc.excludeFromPlay,
+                                      child: IconButton(
+                                        icon: const Icon(
+                                          Icons.block,
+                                          color: Colors.orange,
+                                        ),
+                                        onPressed: () => _deleteCurrentVideo(
+                                          DeleteAction.exclude,
+                                        ),
+                                      ),
+                                    ),
+                                  if (currentItem.isRemote && remoteActions.$2)
+                                    Tooltip(
+                                      message: loc.lanCopyToLocal,
+                                      child: IconButton(
+                                        icon: const Icon(
+                                          Icons.download,
+                                          color: Colors.greenAccent,
+                                        ),
+                                        onPressed: _copyCurrentVideo,
+                                      ),
+                                    ),
+                                  // 本地视频保持排除/删除按钮（跟随删除行为设置）
+                                  if (!currentItem.isRemote)
+                                    Tooltip(
+                                      message:
                                           settings.deleteAction ==
                                               DeleteAction.exclude
-                                          ? Colors.orange
-                                          : Colors.red,
-                                    ),
-                                    onPressed: _showDeleteConfirmation,
-                                  ),
-                                ),
-                                Tooltip(
-                                  message: AppLocalizations.of(context).rotate,
-                                  child: IconButton(
-                                    icon: const Icon(Icons.rotate_right),
-                                    onPressed: _rotateVideo,
-                                  ),
-                                ),
-                                Tooltip(
-                                  message: AppLocalizations.of(
-                                    context,
-                                  ).settings,
-                                  child: IconButton(
-                                    icon: const Icon(Icons.settings),
-                                    onPressed: () => Navigator.pushNamed(
-                                      context,
-                                      '/settings',
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        if (_showControls)
-                          Positioned(
-                            bottom: 0,
-                            left: 0,
-                            right: 0,
-                            child: Container(
-                              key: _bottomControlsKey,
-                              color: Colors.black.withValues(alpha: 0.5),
-                              padding: const EdgeInsets.all(16),
-                              child: Column(
-                                children: [
-                                  if (settings.showVideoInfo && _showInfo)
-                                    Padding(
-                                      padding: const EdgeInsets.only(
-                                        bottom: 12,
+                                          ? loc.excludeFromPlay
+                                          : loc.deleteFileLabel,
+                                      child: IconButton(
+                                        icon: Icon(
+                                          settings.deleteAction ==
+                                                  DeleteAction.exclude
+                                              ? Icons.block
+                                              : Icons.delete,
+                                          color:
+                                              settings.deleteAction ==
+                                                  DeleteAction.exclude
+                                              ? Colors.orange
+                                              : Colors.red,
+                                        ),
+                                        onPressed: _showDeleteConfirmation,
                                       ),
-                                      child: SingleChildScrollView(
-                                        scrollDirection: Axis.horizontal,
-                                        child: Row(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.center,
-                                          children: [
-                                            Text(
-                                              slideProvider
-                                                  .videos[slideProvider
-                                                      .currentIndex]
-                                                  .name,
-                                              style: const TextStyle(
-                                                fontSize: 14,
-                                                color: Colors.white,
-                                              ),
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                            const SizedBox(width: 16),
-                                            Text(
-                                              _fileSizeLabel(
+                                    ),
+                                  Tooltip(
+                                    message: AppLocalizations.of(
+                                      context,
+                                    ).rotate,
+                                    child: IconButton(
+                                      icon: const Icon(Icons.rotate_right),
+                                      onPressed: _rotateVideo,
+                                    ),
+                                  ),
+                                  Tooltip(
+                                    message: AppLocalizations.of(
+                                      context,
+                                    ).settings,
+                                    child: IconButton(
+                                      icon: const Icon(Icons.settings),
+                                      onPressed: () => Navigator.pushNamed(
+                                        context,
+                                        '/settings',
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          if (_showControls)
+                            Positioned(
+                              bottom: 0,
+                              left: 0,
+                              right: 0,
+                              child: Container(
+                                key: _bottomControlsKey,
+                                color: Colors.black.withValues(alpha: 0.5),
+                                padding: const EdgeInsets.all(16),
+                                child: Column(
+                                  children: [
+                                    if (settings.showVideoInfo && _showInfo)
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                          bottom: 12,
+                                        ),
+                                        child: SingleChildScrollView(
+                                          scrollDirection: Axis.horizontal,
+                                          child: Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            children: [
+                                              Text(
                                                 slideProvider
                                                     .videos[slideProvider
                                                         .currentIndex]
-                                                    .path,
+                                                    .name,
+                                                style: const TextStyle(
+                                                  fontSize: 14,
+                                                  color: Colors.white,
+                                                ),
+                                                overflow: TextOverflow.ellipsis,
                                               ),
-                                              style: const TextStyle(
-                                                fontSize: 12,
-                                                color: Colors.grey,
+                                              const SizedBox(width: 16),
+                                              Text(
+                                                _fileSizeLabel(
+                                                  slideProvider
+                                                      .videos[slideProvider
+                                                      .currentIndex],
+                                                ),
+                                                style: const TextStyle(
+                                                  fontSize: 12,
+                                                  color: Colors.grey,
+                                                ),
                                               ),
-                                            ),
-                                            const SizedBox(width: 16),
-                                            Text(
-                                              _resolutionLabel(),
-                                              style: const TextStyle(
-                                                fontSize: 12,
-                                                color: Colors.grey,
+                                              const SizedBox(width: 16),
+                                              Text(
+                                                _resolutionLabel(
+                                                  slideProvider
+                                                      .videos[slideProvider
+                                                      .currentIndex],
+                                                ),
+                                                style: const TextStyle(
+                                                  fontSize: 12,
+                                                  color: Colors.grey,
+                                                ),
                                               ),
-                                            ),
-                                          ],
+                                            ],
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                  // 播放进度条：可拖拽跳转，也反映左右滑动的预览
-                                  Row(
-                                    children: [
-                                      Text(
-                                        _formatDuration(
-                                          _seekPreview ?? _videoPosition,
+                                    // 播放进度条：可拖拽跳转，也反映左右滑动的预览
+                                    Row(
+                                      children: [
+                                        Text(
+                                          _formatDuration(
+                                            _seekPreview ?? _videoPosition,
+                                          ),
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            color: Colors.white,
+                                          ),
                                         ),
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.white,
-                                        ),
-                                      ),
-                                      Expanded(
-                                        child: Slider(
-                                          value:
-                                              (_seekPreview ?? _videoPosition)
-                                                  .inMilliseconds
-                                                  .clamp(
-                                                    0,
-                                                    math.max(
-                                                      _videoDuration
-                                                          .inMilliseconds,
-                                                      1,
-                                                    ),
-                                                  )
-                                                  .toDouble(),
-                                          max: math
-                                              .max(
-                                                _videoDuration.inMilliseconds,
-                                                1,
-                                              )
-                                              .toDouble(),
-                                          onChanged: (value) {
-                                            if (_videoDuration <=
-                                                Duration.zero) {
-                                              return;
-                                            }
-                                            setState(
-                                              () => _seekPreview = Duration(
+                                        Expanded(
+                                          child: Slider(
+                                            value:
+                                                (_seekPreview ?? _videoPosition)
+                                                    .inMilliseconds
+                                                    .clamp(
+                                                      0,
+                                                      math.max(
+                                                        _videoDuration
+                                                            .inMilliseconds,
+                                                        1,
+                                                      ),
+                                                    )
+                                                    .toDouble(),
+                                            max: math
+                                                .max(
+                                                  _videoDuration.inMilliseconds,
+                                                  1,
+                                                )
+                                                .toDouble(),
+                                            onChanged: (value) {
+                                              if (_videoDuration <=
+                                                  Duration.zero) {
+                                                return;
+                                              }
+                                              setState(
+                                                () => _seekPreview = Duration(
+                                                  milliseconds: value.round(),
+                                                ),
+                                              );
+                                            },
+                                            // 拖动进度条时不要被自动隐藏计时打断
+                                            onChangeStart: (value) {
+                                              _hideControlsTimer?.cancel();
+                                            },
+                                            onChangeEnd: (value) {
+                                              final target = Duration(
                                                 milliseconds: value.round(),
-                                              ),
-                                            );
-                                          },
-                                          // 拖动进度条时不要被自动隐藏计时打断
-                                          onChangeStart: (value) {
-                                            _hideControlsTimer?.cancel();
-                                          },
-                                          onChangeEnd: (value) {
-                                            final target = Duration(
-                                              milliseconds: value.round(),
-                                            );
-                                            setState(() => _seekPreview = null);
-                                            unawaited(_player.seek(target));
-                                            _hideControlsDelayed();
-                                          },
+                                              );
+                                              setState(
+                                                () => _seekPreview = null,
+                                              );
+                                              unawaited(_player.seek(target));
+                                              _hideControlsDelayed();
+                                            },
+                                          ),
                                         ),
-                                      ),
-                                      Text(
-                                        _formatDuration(_videoDuration),
-                                        style: const TextStyle(
-                                          fontSize: 12,
+                                        Text(
+                                          _formatDuration(_videoDuration),
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        // 单一循环：只循环当前视频，播完不跳下一个。
+                                        // 与设置页的「循环播放」（整批播完后的行为）互不影响。
+                                        // 图标比相邻的主按钮小一档。
+                                        Tooltip(
+                                          message: AppLocalizations.of(
+                                            context,
+                                          ).singleLoop,
+                                          child: IconButton(
+                                            icon: Icon(
+                                              _singleLoop
+                                                  ? Icons.repeat_one
+                                                  : Icons.repeat,
+                                              size: 24,
+                                              color: _singleLoop
+                                                  ? Colors.lightBlueAccent
+                                                  : Colors.white,
+                                            ),
+                                            constraints: const BoxConstraints(
+                                              minWidth: 36,
+                                              minHeight: 36,
+                                            ),
+                                            padding: EdgeInsets.zero,
+                                            onPressed: () {
+                                              setState(
+                                                () =>
+                                                    _singleLoop = !_singleLoop,
+                                              );
+                                              _applyPlaylistMode();
+                                            },
+                                          ),
+                                        ),
+                                        const SizedBox(width: 16),
+                                        IconButton(
+                                          icon: const Icon(
+                                            Icons.skip_previous,
+                                            size: 36,
+                                          ),
                                           color: Colors.white,
+                                          onPressed: () {
+                                            _prevVideo();
+                                            _showControlsTemporarily();
+                                          },
                                         ),
-                                      ),
-                                    ],
-                                  ),
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      // 单一循环：只循环当前视频，播完不跳下一个。
-                                      // 与设置页的「循环播放」（整批播完后的行为）互不影响。
-                                      // 图标比相邻的主按钮小一档。
-                                      Tooltip(
-                                        message: AppLocalizations.of(
-                                          context,
-                                        ).singleLoop,
-                                        child: IconButton(
+                                        const SizedBox(width: 32),
+                                        IconButton(
                                           icon: Icon(
-                                            _singleLoop
-                                                ? Icons.repeat_one
-                                                : Icons.repeat,
+                                            // 播放完毕（或已暂停）时显示播放图标
+                                            slideProvider.isPlaying &&
+                                                    !_completed
+                                                ? Icons.pause_circle
+                                                : Icons.play_circle,
+                                            size: 64,
+                                          ),
+                                          color: Colors.white,
+                                          onPressed: _togglePlay,
+                                        ),
+                                        const SizedBox(width: 32),
+                                        IconButton(
+                                          icon: const Icon(
+                                            Icons.skip_next,
+                                            size: 36,
+                                          ),
+                                          color: Colors.white,
+                                          onPressed: () {
+                                            _nextVideo();
+                                            _showControlsTemporarily();
+                                          },
+                                        ),
+                                        const SizedBox(width: 16),
+                                        // 音量：控制播放器自身音量（0~100）。
+                                        // 弹出的是竖向滑杆：最小值在下、最大值在上。
+                                        PopupMenuButton<double>(
+                                          tooltip: AppLocalizations.of(
+                                            context,
+                                          ).volume,
+                                          icon: Icon(
+                                            _volumeIcon,
                                             size: 24,
-                                            color: _singleLoop
-                                                ? Colors.lightBlueAccent
-                                                : Colors.white,
+                                            color: Colors.white,
                                           ),
                                           constraints: const BoxConstraints(
                                             minWidth: 36,
                                             minHeight: 36,
                                           ),
                                           padding: EdgeInsets.zero,
-                                          onPressed: () {
-                                            setState(
-                                              () => _singleLoop = !_singleLoop,
-                                            );
-                                            _applyPlaylistMode();
-                                          },
-                                        ),
-                                      ),
-                                      const SizedBox(width: 16),
-                                      IconButton(
-                                        icon: const Icon(
-                                          Icons.skip_previous,
-                                          size: 36,
-                                        ),
-                                        color: Colors.white,
-                                        onPressed: () {
-                                          _prevVideo();
-                                          _showControlsTemporarily();
-                                        },
-                                      ),
-                                      const SizedBox(width: 32),
-                                      IconButton(
-                                        icon: Icon(
-                                          // 播放完毕（或已暂停）时显示播放图标
-                                          slideProvider.isPlaying && !_completed
-                                              ? Icons.pause_circle
-                                              : Icons.play_circle,
-                                          size: 64,
-                                        ),
-                                        color: Colors.white,
-                                        onPressed: _togglePlay,
-                                      ),
-                                      const SizedBox(width: 32),
-                                      IconButton(
-                                        icon: const Icon(
-                                          Icons.skip_next,
-                                          size: 36,
-                                        ),
-                                        color: Colors.white,
-                                        onPressed: () {
-                                          _nextVideo();
-                                          _showControlsTemporarily();
-                                        },
-                                      ),
-                                      const SizedBox(width: 16),
-                                      // 音量：控制播放器自身音量（0~100）。
-                                      // 弹出的是竖向滑杆：最小值在下、最大值在上。
-                                      PopupMenuButton<double>(
-                                        tooltip: AppLocalizations.of(
-                                          context,
-                                        ).volume,
-                                        icon: Icon(
-                                          _volumeIcon,
-                                          size: 24,
-                                          color: Colors.white,
-                                        ),
-                                        constraints: const BoxConstraints(
-                                          minWidth: 36,
-                                          minHeight: 36,
-                                        ),
-                                        padding: EdgeInsets.zero,
-                                        itemBuilder: (context) {
-                                          // 弹层打开期间的本地预览音量：拖动中只改这里，
-                                          // 松手才写回播放器与页面状态。避免每个像素都触发
-                                          // mpv 调用与整页重建，也避免语义值高频抖动
-                                          // （Windows 无障碍层会在此时进入引擎的
-                                          // 无障碍路径，深递归导致崩溃）。
-                                          var previewVolume = _volume;
-                                          return [
-                                            PopupMenuItem<double>(
-                                              // enabled: false 让滑杆自己接收手势，
-                                              // 点击/拖动滑杆时不会把菜单一起关掉
-                                              enabled: false,
-                                              padding: EdgeInsets.zero,
-                                              // 该弹层不向无障碍层暴露语义：拖动时数值
-                                              // 高频变化，会诱发 UIA 在引擎无障碍路径上
-                                              // 深递归崩溃
-                                              child: ExcludeSemantics(
-                                                child: SizedBox(
-                                                  width: 56,
-                                                  height: 180,
-                                                  child: StatefulBuilder(
-                                                    builder: (context, setPopupState) => Column(
-                                                      mainAxisAlignment:
-                                                          MainAxisAlignment
-                                                              .center,
-                                                      children: [
-                                                        // 数值用未旋转的 Text 单独显示，
-                                                        // 否则会被 RotatedBox 一起竖起来
-                                                        Text(
-                                                          previewVolume
-                                                              .round()
-                                                              .toString(),
-                                                          style:
-                                                              const TextStyle(
-                                                                color: Colors
-                                                                    .white,
-                                                                fontSize: 13,
+                                          itemBuilder: (context) {
+                                            // 弹层打开期间的本地预览音量：拖动中只改这里，
+                                            // 松手才写回播放器与页面状态。避免每个像素都触发
+                                            // mpv 调用与整页重建，也避免语义值高频抖动
+                                            // （Windows 无障碍层会在此时进入引擎的
+                                            // 无障碍路径，深递归导致崩溃）。
+                                            var previewVolume = _volume;
+                                            return [
+                                              PopupMenuItem<double>(
+                                                // enabled: false 让滑杆自己接收手势，
+                                                // 点击/拖动滑杆时不会把菜单一起关掉
+                                                enabled: false,
+                                                padding: EdgeInsets.zero,
+                                                // 该弹层不向无障碍层暴露语义：拖动时数值
+                                                // 高频变化，会诱发 UIA 在引擎无障碍路径上
+                                                // 深递归崩溃
+                                                child: ExcludeSemantics(
+                                                  child: SizedBox(
+                                                    width: 56,
+                                                    height: 180,
+                                                    child: StatefulBuilder(
+                                                      builder: (context, setPopupState) => Column(
+                                                        mainAxisAlignment:
+                                                            MainAxisAlignment
+                                                                .center,
+                                                        children: [
+                                                          // 数值用未旋转的 Text 单独显示，
+                                                          // 否则会被 RotatedBox 一起竖起来
+                                                          Text(
+                                                            previewVolume
+                                                                .round()
+                                                                .toString(),
+                                                            style:
+                                                                const TextStyle(
+                                                                  color: Colors
+                                                                      .white,
+                                                                  fontSize: 13,
+                                                                ),
+                                                          ),
+                                                          const SizedBox(
+                                                            height: 4,
+                                                          ),
+                                                          Expanded(
+                                                            child: RotatedBox(
+                                                              // 3 个 quarterTurns =
+                                                              // 逆时针 90°，滑杆由横向变竖向
+                                                              quarterTurns: 3,
+                                                              child: Slider(
+                                                                value: previewVolume
+                                                                    .clamp(
+                                                                      0.0,
+                                                                      100.0,
+                                                                    )
+                                                                    .toDouble(),
+                                                                max: 100,
+                                                                divisions: 100,
+                                                                // 拖动中只更新弹层预览
+                                                                onChanged: (value) {
+                                                                  setPopupState(
+                                                                    () {
+                                                                      previewVolume =
+                                                                          value;
+                                                                    },
+                                                                  );
+                                                                },
+                                                                // 松手才真正写回播放器，
+                                                                // 并收起弹层、重启工具栏自动隐藏计时
+                                                                onChangeEnd: (value) {
+                                                                  _setVolume(
+                                                                    value,
+                                                                  );
+                                                                  Navigator.of(
+                                                                    context,
+                                                                  ).pop();
+                                                                  _hideControlsDelayed();
+                                                                },
                                                               ),
-                                                        ),
-                                                        const SizedBox(
-                                                          height: 4,
-                                                        ),
-                                                        Expanded(
-                                                          child: RotatedBox(
-                                                            // 3 个 quarterTurns =
-                                                            // 逆时针 90°，滑杆由横向变竖向
-                                                            quarterTurns: 3,
-                                                            child: Slider(
-                                                              value: previewVolume
-                                                                  .clamp(
-                                                                    0.0,
-                                                                    100.0,
-                                                                  )
-                                                                  .toDouble(),
-                                                              max: 100,
-                                                              divisions: 100,
-                                                              // 拖动中只更新弹层预览
-                                                              onChanged: (value) {
-                                                                setPopupState(() {
-                                                                  previewVolume =
-                                                                      value;
-                                                                });
-                                                              },
-                                                              // 松手才真正写回播放器，
-                                                              // 并收起弹层、重启工具栏自动隐藏计时
-                                                              onChangeEnd: (value) {
-                                                                _setVolume(
-                                                                  value,
-                                                                );
-                                                                Navigator.of(
-                                                                  context,
-                                                                ).pop();
-                                                                _hideControlsDelayed();
-                                                              },
                                                             ),
                                                           ),
-                                                        ),
-                                                      ],
+                                                        ],
+                                                      ),
                                                     ),
                                                   ),
                                                 ),
                                               ),
-                                            ),
-                                          ];
-                                        },
-                                      ),
-                                    ],
-                                  ),
-                                ],
+                                            ];
+                                          },
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
-                          ),
-                        // 横向滑动拖动进度时，居中显示预览时间
-                        // （工具栏隐藏时也能看到拖动反馈）
-                        if (_seekPreview != null)
-                          Positioned.fill(
-                            child: IgnorePointer(
-                              child: Center(
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 20,
-                                    vertical: 10,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Colors.black.withValues(alpha: 0.6),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Text(
-                                    '${_formatDuration(_seekPreview!)} / ${_formatDuration(_videoDuration)}',
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 18,
+                          // 横向滑动拖动进度时，居中显示预览时间
+                          // （工具栏隐藏时也能看到拖动反馈）
+                          if (_seekPreview != null)
+                            Positioned.fill(
+                              child: IgnorePointer(
+                                child: Center(
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 20,
+                                      vertical: 10,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.black.withValues(
+                                        alpha: 0.6,
+                                      ),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Text(
+                                      '${_formatDuration(_seekPreview!)} / ${_formatDuration(_videoDuration)}',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 18,
+                                      ),
                                     ),
                                   ),
                                 ),
                               ),
                             ),
-                          ),
-                        // 删除通知覆盖层
-                        if (_showDeleteMessage)
-                          Positioned(
-                            top: 100,
-                            left: 0,
-                            right: 0,
-                            child: Center(
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 24,
-                                  vertical: 12,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: Colors.green.withValues(alpha: 0.8),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Text(
-                                  _deleteMessageText,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
+                          // 删除通知覆盖层
+                          if (_showDeleteMessage)
+                            Positioned(
+                              top: 100,
+                              left: 0,
+                              right: 0,
+                              child: Center(
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 24,
+                                    vertical: 12,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.green.withValues(alpha: 0.8),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    _deleteMessageText,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                    ),
                                   ),
                                 ),
                               ),
                             ),
-                          ),
-                        // 全屏播放时鼠标应与工具栏同时隐藏、同时出现：
-                        // 工具栏隐藏期间在最上层铺一层「不显示光标」的透明区域。
-                        // opaque:false 保证它不拦截下方控件。
-                        if (!_showControls)
-                          const MouseRegion(
-                            cursor: SystemMouseCursors.none,
-                            opaque: false,
-                          ),
-                      ],
-                    ),
-                  );
-                },
+                          // 全屏播放时鼠标应与工具栏同时隐藏、同时出现：
+                          // 工具栏隐藏期间在最上层铺一层「不显示光标」的透明区域。
+                          // opaque:false 保证它不拦截下方控件。
+                          if (!_showControls)
+                            const MouseRegion(
+                              cursor: SystemMouseCursors.none,
+                              opaque: false,
+                            ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
               ),
             ),
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 }
