@@ -11,7 +11,10 @@ import 'package:steam_flow/services/video_scan_service.dart';
 import 'package:steam_flow/l10n/app_localizations.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  /// 由右键菜单/命令行传入、启动后直接播放的视频路径
+  final String? initialVideoPath;
+
+  const HomeScreen({super.key, this.initialVideoPath});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -23,7 +26,24 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _autoPlayOnStartup();
+    if (widget.initialVideoPath != null) {
+      // 从右键菜单打开：跳过自动扫描，直接播放该视频
+      WidgetsBinding.instance.addPostFrameCallback((_) => _openInitialVideo());
+    } else {
+      _autoPlayOnStartup();
+    }
+  }
+
+  /// 直接播放命令行传入的视频（只播放该文件，不扫描其所在目录）。
+  void _openInitialVideo() {
+    final path = widget.initialVideoPath;
+    if (!mounted || path == null) return;
+    final slideProvider = Provider.of<SlideProvider>(context, listen: false);
+    slideProvider.setVideos([
+      VideoItem(name: path.split(Platform.pathSeparator).last, path: path),
+    ]);
+    slideProvider.startPlay();
+    Navigator.pushNamed(context, '/player');
   }
 
   Future<void> _autoPlayOnStartup() async {

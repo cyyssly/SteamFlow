@@ -130,7 +130,6 @@ class _HelpScreenState extends State<HelpScreen> {
     _bullet(loc.helpWheel),
     _groupTitle(loc.helpGroupTransition),
     _bullet(loc.helpTransition),
-    _bullet(loc.helpAnimDuration),
     _groupTitle(loc.helpGroupFullscreen),
     _bullet(loc.helpFullscreen),
     _bullet(loc.helpToolbar),

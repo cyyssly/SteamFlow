@@ -15,6 +15,9 @@ import 'package:steam_flow/providers/settings_provider.dart';
 class DesktopTrayService with WindowListener, TrayListener {
   DesktopTrayService(this._settings);
 
+  /// 全局实例：播放器关闭按钮复用同一份托盘状态
+  static DesktopTrayService? instance;
+
   /// 托盘图标（随 flutter_assets 打包，tray_manager 会拼上资源目录）
   static const String _trayIcon = 'assets/icon/tray_icon.ico';
 
@@ -28,6 +31,7 @@ class DesktopTrayService with WindowListener, TrayListener {
 
   Future<void> initialize() async {
     if (!_supported) return;
+    instance = this;
     await windowManager.ensureInitialized();
     // 拦截关闭按钮，交给 onWindowClose 决定是退出还是收起
     await windowManager.setPreventClose(true);
@@ -37,7 +41,14 @@ class DesktopTrayService with WindowListener, TrayListener {
 
   @override
   void onWindowClose() async {
-    if (_quitting) return;
+    await closeApplication();
+  }
+
+  /// 由标题栏关闭按钮或播放器关闭按钮调用。
+  ///
+  /// 按设置决定直接退出，还是收起到系统托盘继续运行。
+  Future<void> closeApplication() async {
+    if (!_supported || _quitting) return;
     if (!_settings.closeToTray) {
       await _exit();
       return;

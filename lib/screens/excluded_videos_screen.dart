@@ -322,7 +322,7 @@ class _ExcludedVideosScreenState extends State<ExcludedVideosScreen>
           actions: [
             if (_excludedItems.isNotEmpty) ...[
               IconButton(
-                icon: const Icon(Icons.restore, color: Colors.orange),
+                icon: const Icon(Icons.undo, color: Colors.greenAccent),
                 tooltip: loc.restoreAll,
                 onPressed: _restoreAll,
               ),
@@ -340,7 +340,7 @@ class _ExcludedVideosScreenState extends State<ExcludedVideosScreen>
                 onPressed: _moveAll,
               ),
               IconButton(
-                icon: const Icon(Icons.content_copy, color: Colors.greenAccent),
+                icon: const Icon(Icons.content_copy, color: Colors.white),
                 tooltip: loc.copyAllTo,
                 onPressed: _copyAll,
               ),
@@ -386,8 +386,8 @@ class _ExcludedVideosScreenState extends State<ExcludedVideosScreen>
                 onCopy: (index) {
                   _copyVideo(_excludedItems[index]);
                 },
-                primaryIcon: Icons.restore,
-                primaryColor: Colors.orange,
+                primaryIcon: Icons.undo,
+                primaryColor: Colors.greenAccent,
                 primaryTooltip: loc.restore,
               ),
       ),

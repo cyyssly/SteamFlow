@@ -11,6 +11,7 @@ import 'package:steam_flow/providers/settings_provider.dart';
 import 'package:steam_flow/providers/slide_provider.dart';
 import 'package:steam_flow/services/lan_client_service.dart';
 import 'package:steam_flow/services/remote_copy_service.dart';
+import 'package:steam_flow/widgets/browse_layout_icon.dart';
 import 'package:steam_flow/widgets/masonry_video_grid.dart';
 import 'package:steam_flow/widgets/sort_alphabet_icon.dart';
 import 'package:steam_flow/main.dart';
@@ -57,6 +58,9 @@ class _RemoteVideosScreenState extends State<RemoteVideosScreen>
   /// 当前排序方式（默认顺序）
   _RemoteSortAction _sortAction = _RemoteSortAction.nameAsc;
 
+  /// 当前浏览格式；未单独设置过的共享文件夹跟随设置页默认值
+  BrowseLayout _browseLayout = BrowseLayout.masonry;
+
   /// 随机排序的种子：同一次浏览固定不变，各页顺序才一致
   String _randomSeed = '';
 
@@ -70,6 +74,7 @@ class _RemoteVideosScreenState extends State<RemoteVideosScreen>
   void initState() {
     super.initState();
     _restoreSortMode();
+    _restoreBrowseLayout();
     _load();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -105,6 +110,29 @@ class _RemoteVideosScreenState extends State<RemoteVideosScreen>
       // 恢复随机排序时也要固定种子，否则逐页请求会得到不一致的顺序
       _randomSeed = DateTime.now().microsecondsSinceEpoch.toString();
     }
+  }
+
+  /// 恢复该共享文件夹上次使用的浏览格式；未单独设置时跟随设置页默认值
+  void _restoreBrowseLayout() {
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
+    _browseLayout =
+        SettingsProvider.parseBrowseLayout(
+          settings.sharedBrowseLayoutFor(_sharedFolderKey),
+        ) ??
+        settings.browseLayout;
+  }
+
+  /// 切换浏览格式，并记住到当前共享文件夹
+  void _applyBrowseLayout(BrowseLayout layout) {
+    if (layout == _browseLayout) return;
+    setState(() {
+      _browseLayout = layout;
+      _selectedIndex = null;
+    });
+    Provider.of<SettingsProvider>(
+      context,
+      listen: false,
+    ).setSharedBrowseLayout(_sharedFolderKey, layout);
   }
 
   /// 设置页播放顺序 → 瀑布流排序方式的映射
@@ -263,10 +291,31 @@ class _RemoteVideosScreenState extends State<RemoteVideosScreen>
 
   bool _isSortActive(_RemoteSortAction action) => _sortAction == action;
 
+  /// 各排序方式对应的图标；既用于菜单项，也用于标题栏显示当前选中项
+  Widget _sortIcon(_RemoteSortAction action, Color color) {
+    switch (action) {
+      case _RemoteSortAction.nameAsc:
+        return SortAlphabetIcon(ascending: true, color: color);
+      case _RemoteSortAction.nameDesc:
+        return SortAlphabetIcon(ascending: false, color: color);
+      case _RemoteSortAction.timeNewest:
+        return Icon(Icons.update, color: color);
+      case _RemoteSortAction.timeOldest:
+        return Icon(Icons.history, color: color);
+      case _RemoteSortAction.sizeLargest:
+        return Icon(Icons.south, color: color);
+      case _RemoteSortAction.sizeSmallest:
+        return Icon(Icons.north, color: color);
+      case _RemoteSortAction.random:
+        return Icon(Icons.shuffle, color: color);
+      case _RemoteSortAction.newPreferred:
+        return Icon(Icons.fiber_new, color: color);
+    }
+  }
+
   PopupMenuItem<_RemoteSortAction> _sortMenuItem({
     required _RemoteSortAction action,
     required String label,
-    required Widget Function(Color color) iconBuilder,
   }) {
     final selected = _isSortActive(action);
     final color = selected ? const Color(0xFFe94560) : Colors.white70;
@@ -277,7 +326,7 @@ class _RemoteVideosScreenState extends State<RemoteVideosScreen>
           SizedBox(
             width: 24,
             height: 24,
-            child: Center(child: iconBuilder(color)),
+            child: Center(child: _sortIcon(action, color)),
           ),
           const SizedBox(width: 12),
           Expanded(child: Text(label)),
@@ -287,57 +336,71 @@ class _RemoteVideosScreenState extends State<RemoteVideosScreen>
     );
   }
 
-  /// 排序入口：用一个按钮弹出全部排序方式，避免占用过多标题栏空间
+  /// 排序入口：按钮直接显示当前排序的图标，点击弹出全部排序方式
   Widget _buildSortMenu(AppLocalizations loc) {
     return PopupMenuButton<_RemoteSortAction>(
       tooltip: loc.sortBy,
-      icon: const Icon(Icons.sort, color: Colors.white70),
+      icon: _sortIcon(_sortAction, Colors.white70),
       onSelected: _applySort,
       itemBuilder: (context) => [
         _sortMenuItem(
           action: _RemoteSortAction.nameAsc,
           label: loc.sortSequential,
-          iconBuilder: (color) =>
-              SortAlphabetIcon(ascending: true, color: color),
         ),
         _sortMenuItem(
           action: _RemoteSortAction.nameDesc,
           label: loc.sortReverse,
-          iconBuilder: (color) =>
-              SortAlphabetIcon(ascending: false, color: color),
         ),
         _sortMenuItem(
           action: _RemoteSortAction.timeNewest,
           label: loc.sortNewest,
-          iconBuilder: (color) => Icon(Icons.update, color: color),
         ),
         _sortMenuItem(
           action: _RemoteSortAction.timeOldest,
           label: loc.sortOldest,
-          iconBuilder: (color) => Icon(Icons.history, color: color),
         ),
         _sortMenuItem(
           action: _RemoteSortAction.sizeLargest,
           label: loc.largestFirst,
-          iconBuilder: (color) => Icon(Icons.south, color: color),
         ),
         _sortMenuItem(
           action: _RemoteSortAction.sizeSmallest,
           label: loc.smallestFirst,
-          iconBuilder: (color) => Icon(Icons.north, color: color),
         ),
-        _sortMenuItem(
-          action: _RemoteSortAction.random,
-          label: loc.sortRandom,
-          iconBuilder: (color) => Icon(Icons.shuffle, color: color),
-        ),
+        _sortMenuItem(action: _RemoteSortAction.random, label: loc.sortRandom),
         _sortMenuItem(
           action: _RemoteSortAction.newPreferred,
           label: loc.newPreferred,
-          iconBuilder: (color) => Icon(Icons.fiber_new, color: color),
         ),
       ],
     );
+  }
+
+  /// 卡片短按：桌面端直接播放；手机端按「短按行为」设置执行播放或选中
+  void _handleCardTap(int index) {
+    final isMobile = Platform.isAndroid || Platform.isIOS;
+    if (!isMobile) {
+      _startPlayback(index);
+      return;
+    }
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
+    if (settings.mobileTapAction == MobileTapAction.play ||
+        _selectedIndex == index) {
+      _startPlayback(index);
+    } else {
+      setState(() => _selectedIndex = index);
+    }
+  }
+
+  /// 长按：手机端「播放」模式下用于选中，其余情况直接播放
+  void _handleCardLongPress(int index) {
+    final isMobile = Platform.isAndroid || Platform.isIOS;
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
+    if (isMobile && settings.mobileTapAction == MobileTapAction.play) {
+      setState(() => _selectedIndex = index);
+      return;
+    }
+    _startPlayback(index);
   }
 
   /// 以当前共享文件夹为播放范围进入播放页，顺序沿用瀑布流当前排序。
@@ -416,7 +479,18 @@ class _RemoteVideosScreenState extends State<RemoteVideosScreen>
         centerTitle: true,
         backgroundColor: const Color(0xFF16213e),
         actions: [
-          if (_videos.isNotEmpty) _buildSortMenu(loc),
+          if (_videos.isNotEmpty) ...[
+            IconButton(
+              tooltip: loc.startPlay,
+              icon: const Icon(Icons.play_arrow, color: Colors.white70),
+              onPressed: () => _startPlayback(0),
+            ),
+            BrowseLayoutMenuButton(
+              value: _browseLayout,
+              onSelected: _applyBrowseLayout,
+            ),
+            _buildSortMenu(loc),
+          ],
           IconButton(
             tooltip: loc.lanRefresh,
             icon: const Icon(Icons.refresh),
@@ -458,22 +532,14 @@ class _RemoteVideosScreenState extends State<RemoteVideosScreen>
           : MasonryVideoGrid(
               items: _videos,
               fileListInfo: settings.fileListInfo,
+              layout: _browseLayout,
               selectedIndex: _selectedIndex,
-              onTap: (index) {
-                // 与本地瀑布流一致：桌面端点按直接播放；
-                // 手机端第一次点按先选中，再次点按才播放
-                final isMobile = Platform.isAndroid || Platform.isIOS;
-                if (!isMobile || _selectedIndex == index) {
-                  _startPlayback(index);
-                } else {
-                  setState(() => _selectedIndex = index);
-                }
-              },
-              onLongPress: _startPlayback,
+              onTap: _handleCardTap,
+              onLongPress: _handleCardLongPress,
               onDelete: (index) => _copyToLocal(_videos[index]),
               singleActionOverlay: true,
               singleActionIcon: Icons.download,
-              singleActionColor: Colors.green,
+              singleActionColor: Colors.white,
               singleActionTooltip: loc.lanCopyToLocal,
             ),
     );

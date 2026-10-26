@@ -9,6 +9,7 @@ import 'package:steam_flow/providers/slide_provider.dart';
 import 'package:steam_flow/services/fullscreen_service.dart';
 import 'package:steam_flow/services/video_scan_service.dart';
 import 'package:steam_flow/services/media_store_service.dart';
+import 'package:steam_flow/widgets/browse_layout_icon.dart';
 import 'package:steam_flow/widgets/masonry_video_grid.dart';
 import 'package:steam_flow/widgets/sort_alphabet_icon.dart';
 import 'package:steam_flow/l10n/app_localizations.dart';
@@ -61,6 +62,9 @@ class _FolderVideosScreenState extends State<FolderVideosScreen>
   /// 当前排序方式（默认顺序）
   _SortAction _sortAction = _SortAction.nameAsc;
 
+  /// 当前浏览格式；未单独设置过的文件夹跟随设置页默认值
+  BrowseLayout _browseLayout = BrowseLayout.masonry;
+
   /// 批次代次：每次重新排序都自增，使跨越排序、尚在途中的旧批次作废，
   /// 避免把「旧顺序下的这一批已就绪」错误地记到新顺序的批次边界上。
   int _batchGeneration = 0;
@@ -72,8 +76,32 @@ class _FolderVideosScreenState extends State<FolderVideosScreen>
   void initState() {
     super.initState();
     _restoreSortMode();
+    _restoreBrowseLayout();
     _loadVideos();
     HardwareKeyboard.instance.addHandler(_hardwareKeyHandler);
+  }
+
+  /// 恢复该文件夹上次使用的浏览格式；未单独设置时跟随设置页默认值
+  void _restoreBrowseLayout() {
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
+    _browseLayout =
+        SettingsProvider.parseBrowseLayout(
+          settings.localBrowseLayoutFor(widget.folderPath),
+        ) ??
+        settings.browseLayout;
+  }
+
+  /// 切换浏览格式，并记住到当前文件夹
+  void _applyBrowseLayout(BrowseLayout layout) {
+    if (layout == _browseLayout) return;
+    setState(() {
+      _browseLayout = layout;
+      _selectedIndex = null;
+    });
+    Provider.of<SettingsProvider>(
+      context,
+      listen: false,
+    ).setLocalBrowseLayout(widget.folderPath, layout);
   }
 
   /// 恢复该文件夹上次使用的排序方式；用户未选择过时跟随设置页的播放顺序
@@ -416,10 +444,31 @@ class _FolderVideosScreenState extends State<FolderVideosScreen>
 
   bool _isSortActive(_SortAction action) => _sortAction == action;
 
+  /// 各排序方式对应的图标；既用于菜单项，也用于标题栏显示当前选中项
+  Widget _sortIcon(_SortAction action, Color color) {
+    switch (action) {
+      case _SortAction.nameAsc:
+        return SortAlphabetIcon(ascending: true, color: color);
+      case _SortAction.nameDesc:
+        return SortAlphabetIcon(ascending: false, color: color);
+      case _SortAction.timeNewest:
+        return Icon(Icons.update, color: color);
+      case _SortAction.timeOldest:
+        return Icon(Icons.history, color: color);
+      case _SortAction.sizeLargest:
+        return Icon(Icons.south, color: color);
+      case _SortAction.sizeSmallest:
+        return Icon(Icons.north, color: color);
+      case _SortAction.random:
+        return Icon(Icons.shuffle, color: color);
+      case _SortAction.newPreferred:
+        return Icon(Icons.fiber_new, color: color);
+    }
+  }
+
   PopupMenuItem<_SortAction> _sortMenuItem({
     required _SortAction action,
     required String label,
-    required Widget Function(Color color) iconBuilder,
   }) {
     final selected = _isSortActive(action);
     final color = selected ? const Color(0xFFe94560) : Colors.white70;
@@ -430,7 +479,7 @@ class _FolderVideosScreenState extends State<FolderVideosScreen>
           SizedBox(
             width: 24,
             height: 24,
-            child: Center(child: iconBuilder(color)),
+            child: Center(child: _sortIcon(action, color)),
           ),
           const SizedBox(width: 12),
           Expanded(child: Text(label)),
@@ -440,54 +489,26 @@ class _FolderVideosScreenState extends State<FolderVideosScreen>
     );
   }
 
-  /// 排序入口：用一个按钮弹出全部排序方式，避免占用过多标题栏空间
+  /// 排序入口：按钮直接显示当前排序的图标，点击弹出全部排序方式
   Widget _buildSortMenu(AppLocalizations loc) {
     return PopupMenuButton<_SortAction>(
       tooltip: loc.sortBy,
-      icon: const Icon(Icons.sort, color: Colors.white70),
+      icon: _sortIcon(_sortAction, Colors.white70),
       onSelected: _applySort,
       itemBuilder: (context) => [
-        _sortMenuItem(
-          action: _SortAction.nameAsc,
-          label: loc.sortSequential,
-          iconBuilder: (color) =>
-              SortAlphabetIcon(ascending: true, color: color),
-        ),
-        _sortMenuItem(
-          action: _SortAction.nameDesc,
-          label: loc.sortReverse,
-          iconBuilder: (color) =>
-              SortAlphabetIcon(ascending: false, color: color),
-        ),
-        _sortMenuItem(
-          action: _SortAction.timeNewest,
-          label: loc.sortNewest,
-          iconBuilder: (color) => Icon(Icons.update, color: color),
-        ),
-        _sortMenuItem(
-          action: _SortAction.timeOldest,
-          label: loc.sortOldest,
-          iconBuilder: (color) => Icon(Icons.history, color: color),
-        ),
-        _sortMenuItem(
-          action: _SortAction.sizeLargest,
-          label: loc.largestFirst,
-          iconBuilder: (color) => Icon(Icons.south, color: color),
-        ),
+        _sortMenuItem(action: _SortAction.nameAsc, label: loc.sortSequential),
+        _sortMenuItem(action: _SortAction.nameDesc, label: loc.sortReverse),
+        _sortMenuItem(action: _SortAction.timeNewest, label: loc.sortNewest),
+        _sortMenuItem(action: _SortAction.timeOldest, label: loc.sortOldest),
+        _sortMenuItem(action: _SortAction.sizeLargest, label: loc.largestFirst),
         _sortMenuItem(
           action: _SortAction.sizeSmallest,
           label: loc.smallestFirst,
-          iconBuilder: (color) => Icon(Icons.north, color: color),
         ),
-        _sortMenuItem(
-          action: _SortAction.random,
-          label: loc.sortRandom,
-          iconBuilder: (color) => Icon(Icons.shuffle, color: color),
-        ),
+        _sortMenuItem(action: _SortAction.random, label: loc.sortRandom),
         _sortMenuItem(
           action: _SortAction.newPreferred,
           label: loc.newPreferred,
-          iconBuilder: (color) => Icon(Icons.fiber_new, color: color),
         ),
       ],
     );
@@ -526,6 +547,33 @@ class _FolderVideosScreenState extends State<FolderVideosScreen>
       _allItems.removeWhere((i) => i.path == item.path);
     });
     _showSnack(AppLocalizations.of(context).deletedToTrash);
+  }
+
+  /// 卡片短按：桌面端直接播放；手机端按「短按行为」设置执行播放或选中
+  void _handleCardTap(int index) {
+    final isMobile = Platform.isAndroid || Platform.isIOS;
+    if (!isMobile) {
+      _startPlaybackFrom(index);
+      return;
+    }
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
+    if (settings.mobileTapAction == MobileTapAction.play ||
+        _selectedIndex == index) {
+      _startPlaybackFrom(index);
+    } else {
+      setState(() => _selectedIndex = index);
+    }
+  }
+
+  /// 长按：手机端「播放」模式下用于选中，其余情况直接播放
+  void _handleCardLongPress(int index) {
+    final isMobile = Platform.isAndroid || Platform.isIOS;
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
+    if (isMobile && settings.mobileTapAction == MobileTapAction.play) {
+      setState(() => _selectedIndex = index);
+      return;
+    }
+    _startPlaybackFrom(index);
   }
 
   /// 从瀑布流进入播放。
@@ -577,7 +625,20 @@ class _FolderVideosScreenState extends State<FolderVideosScreen>
           ),
           centerTitle: true,
           backgroundColor: const Color(0xFF16213e),
-          actions: [if (_items.isNotEmpty) _buildSortMenu(loc)],
+          actions: [
+            if (_items.isNotEmpty) ...[
+              IconButton(
+                tooltip: loc.startPlay,
+                icon: const Icon(Icons.play_arrow, color: Colors.white70),
+                onPressed: () => _startPlaybackFrom(0),
+              ),
+              BrowseLayoutMenuButton(
+                value: _browseLayout,
+                onSelected: _applyBrowseLayout,
+              ),
+              _buildSortMenu(loc),
+            ],
+          ],
         ),
         body: _isLoading
             ? const Center(child: CircularProgressIndicator())
@@ -602,22 +663,12 @@ class _FolderVideosScreenState extends State<FolderVideosScreen>
             : MasonryVideoGrid(
                 items: _items,
                 fileListInfo: settings.fileListInfo,
+                layout: _browseLayout,
                 selectedIndex: _selectedIndex,
                 hasMore: _items.length < _allItems.length,
                 onLoadMore: _loadMore,
-                onTap: (index) {
-                  // 桌面端悬停即可看到删除按钮，点按直接进入播放；
-                  // 手机端没有悬停，第一次点按先显示删除按钮，再次点按才进入播放
-                  final isMobile = Platform.isAndroid || Platform.isIOS;
-                  if (!isMobile || _selectedIndex == index) {
-                    _startPlaybackFrom(index);
-                  } else {
-                    setState(() {
-                      _selectedIndex = index;
-                    });
-                  }
-                },
-                onLongPress: _startPlaybackFrom,
+                onTap: _handleCardTap,
+                onLongPress: _handleCardLongPress,
                 onDelete: (index) {
                   _applyDeleteAction(_items[index]);
                   if (mounted) setState(() => _selectedIndex = null);

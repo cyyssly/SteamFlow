@@ -587,11 +587,15 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
       }
     });
     try {
-      await lan.probeSharedDevices(refs);
+      // 逐个重连并收集结果：refreshSharedFolder 会同步最新的文件夹信息与封面，
+      // 返回 false 表示设备离线或对方已不再共享该文件夹。
+      final results = await Future.wait([
+        for (final ref in refs) lan.refreshSharedFolder(ref),
+      ]);
       if (!mounted) return;
-      await lan.refreshSharedFolders(refs);
-      if (!mounted) return;
-      await lan.loadSharedFolderCovers(refs);
+      if (results.any((ok) => !ok)) {
+        _showSnack(AppLocalizations.of(context).lanReconnectFailed);
+      }
     } finally {
       if (mounted) {
         setState(() {
@@ -1018,7 +1022,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
         actions: [
           _actionButton(
             tooltip: loc.restoreAll,
-            icon: const Icon(Icons.restore, color: Colors.orange),
+            icon: const Icon(Icons.undo, color: Colors.greenAccent),
             onPressed: () => _restoreExcludedGroup(allPaths),
           ),
         ],
@@ -1056,7 +1060,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
       actions: [
         _actionButton(
           tooltip: loc.restoreFiles,
-          icon: const Icon(Icons.restore, color: Colors.orange),
+          icon: const Icon(Icons.undo, color: Colors.greenAccent),
           onPressed: () => _restoreExcludedGroup(group.paths),
         ),
         _actionButton(

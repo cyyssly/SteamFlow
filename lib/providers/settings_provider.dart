@@ -24,11 +24,25 @@ enum VideoFitMode { contain, cover, original }
 
 enum BackgroundColor { black, darkGray, white }
 
-enum TransitionAnimation { none, fade, slideLeft, slideUp }
-
 enum DeleteAction {
   exclude, // 排除播放
   delete, // 实际删除
+}
+
+/// 手机端瀑布流卡片的短按行为。
+///
+/// 按下标持久化到 SharedPreferences，新增项请追加在末尾。
+enum MobileTapAction {
+  play, // 短按直接播放，长按选中
+  select, // 短按选中，长按或再次短按播放
+}
+
+/// 未播放完毕的视频下次进入时从何处开始播放。
+///
+/// 按下标持久化到 SharedPreferences，新增项请追加在末尾。
+enum ResumePlayback {
+  resume, // 接续上次进度
+  restart, // 从头播放
 }
 
 enum VideoOrientation {
@@ -47,9 +61,34 @@ enum FileListInfo {
   nameDateSize, // 文件名 + 日期 + 大小
 }
 
+/// 视频浏览格式（瀑布流或固定画幅）。
+///
+/// 按下标持久化到 SharedPreferences，新增项请追加在末尾。
+enum BrowseLayout {
+  masonry, // 瀑布流（按视频原始比例）
+  square, // 正方形
+  landscape4x3, // 横屏 4:3
+  landscape16x9, // 横屏 16:9
+  portrait3x4, // 竖屏 3:4
+  portrait9x16, // 竖屏 9:16
+}
+
+extension BrowseLayoutAspect on BrowseLayout {
+  /// 固定画幅的宽高比；瀑布流返回 null，表示沿用视频自身比例
+  double? get aspectRatio => switch (this) {
+    BrowseLayout.masonry => null,
+    BrowseLayout.square => 1.0,
+    BrowseLayout.landscape4x3 => 4 / 3,
+    BrowseLayout.landscape16x9 => 16 / 9,
+    BrowseLayout.portrait3x4 => 3 / 4,
+    BrowseLayout.portrait9x16 => 9 / 16,
+  };
+}
+
 class SettingsProvider extends ChangeNotifier {
   // 播放基础设置
   PlayOrder _playOrder = PlayOrder.newPreferred;
+  ResumePlayback _resumePlayback = ResumePlayback.resume;
   bool _loopPlay = false;
   bool _autoPlay = true;
 
@@ -57,10 +96,6 @@ class SettingsProvider extends ChangeNotifier {
   VideoFitMode _videoFitMode = VideoFitMode.contain;
   BackgroundColor _backgroundColor = BackgroundColor.black;
   VideoOrientation _videoOrientation = VideoOrientation.followSystem;
-
-  // 切换动画
-  TransitionAnimation _transitionAnimation = TransitionAnimation.fade;
-  double _animationDuration = 0.5;
 
   // 窗口/全屏控制
   bool _startFullscreen = true;
@@ -71,6 +106,13 @@ class SettingsProvider extends ChangeNotifier {
   // 文件与目录相关
   bool _recursiveScan = true;
   FileListInfo _fileListInfo = FileListInfo.none;
+  BrowseLayout _browseLayout = BrowseLayout.masonry;
+
+  /// 本地文件夹的浏览格式（路径 → 格式 id），未记录时跟随设置页默认值
+  Map<String, String> _localBrowseLayouts = {};
+
+  /// 共享文件夹的浏览格式（共享文件夹 key → 格式 id）
+  Map<String, String> _sharedBrowseLayouts = {};
 
   String? _lastFolderPath;
   List<String> _lastFolderPaths = [];
@@ -80,6 +122,12 @@ class SettingsProvider extends ChangeNotifier {
 
   // 快捷键与控制
   bool _wheelSwitchVideo = true;
+
+  /// 手机端短按卡片的行为（默认直接播放）
+  MobileTapAction _mobileTapAction = MobileTapAction.play;
+
+  /// Windows 端是否在支持的视频格式上注册「用 SteamFlow 播放」右键菜单
+  bool _addToContextMenu = false;
 
   // 删除行为设置
   DeleteAction _deleteAction = DeleteAction.exclude;
@@ -120,29 +168,39 @@ class SettingsProvider extends ChangeNotifier {
   /// 读取某个共享文件夹上次使用的排序方式；未记录时返回 null（跟随设置页）
   String? sharedSortFor(String folderKey) => _sharedSortModes[folderKey];
 
+  /// 读取某个本地文件夹上次使用的浏览格式；未记录时返回 null（跟随设置页）
+  String? localBrowseLayoutFor(String folderPath) =>
+      _localBrowseLayouts[folderPath];
+
+  /// 读取某个共享文件夹上次使用的浏览格式；未记录时返回 null（跟随设置页）
+  String? sharedBrowseLayoutFor(String folderKey) =>
+      _sharedBrowseLayouts[folderKey];
+
   /// 上次复制文件的目标目录
   String? get lastCopyDestination => _lastCopyDestination;
 
   PlayOrder get playOrder => _playOrder;
+  ResumePlayback get resumePlayback => _resumePlayback;
   bool get loopPlay => _loopPlay;
   bool get autoPlay => _autoPlay;
   VideoFitMode get videoFitMode => _videoFitMode;
   BackgroundColor get backgroundColor => _backgroundColor;
   VideoOrientation get videoOrientation => _videoOrientation;
-  TransitionAnimation get transitionAnimation => _transitionAnimation;
-  double get animationDuration => _animationDuration;
   bool get startFullscreen => _startFullscreen;
   bool get hideToolbar => _hideToolbar;
   int get controlsHideDelay => _controlsHideDelay;
   bool get keepControlsOnPause => _keepControlsOnPause;
   bool get recursiveScan => _recursiveScan;
   FileListInfo get fileListInfo => _fileListInfo;
+  BrowseLayout get browseLayout => _browseLayout;
 
   String? get lastFolderPath => _lastFolderPath;
   List<String> get lastFolderPaths => _lastFolderPaths;
 
   bool get showVideoInfo => _showVideoInfo;
   bool get wheelSwitchVideo => _wheelSwitchVideo;
+  MobileTapAction get mobileTapAction => _mobileTapAction;
+  bool get addToContextMenu => _addToContextMenu;
   DeleteAction get deleteAction => _deleteAction;
   int get languageIndex => _languageIndex;
 
@@ -174,6 +232,13 @@ class SettingsProvider extends ChangeNotifier {
     _saveSettings();
   }
 
+  void setResumePlayback(ResumePlayback value) {
+    if (_resumePlayback == value) return;
+    _resumePlayback = value;
+    notifyListeners();
+    _saveSettings();
+  }
+
   void setLoopPlay(bool value) {
     _loopPlay = value;
     notifyListeners();
@@ -200,18 +265,6 @@ class SettingsProvider extends ChangeNotifier {
 
   void setVideoOrientation(VideoOrientation value) {
     _videoOrientation = value;
-    notifyListeners();
-    _saveSettings();
-  }
-
-  void setTransitionAnimation(TransitionAnimation value) {
-    _transitionAnimation = value;
-    notifyListeners();
-    _saveSettings();
-  }
-
-  void setAnimationDuration(double value) {
-    _animationDuration = value;
     notifyListeners();
     _saveSettings();
   }
@@ -253,6 +306,14 @@ class SettingsProvider extends ChangeNotifier {
     _saveSettings();
   }
 
+  /// 设置默认的浏览格式（单个文件夹未单独设置时使用）
+  void setBrowseLayout(BrowseLayout value) {
+    if (_browseLayout == value) return;
+    _browseLayout = value;
+    notifyListeners();
+    _saveSettings();
+  }
+
   void setLastFolderPath(String? value) {
     _lastFolderPath = value;
     notifyListeners();
@@ -273,6 +334,22 @@ class SettingsProvider extends ChangeNotifier {
 
   void setWheelSwitchVideo(bool value) {
     _wheelSwitchVideo = value;
+    notifyListeners();
+    _saveSettings();
+  }
+
+  /// 设置手机端短按卡片的行为
+  void setMobileTapAction(MobileTapAction value) {
+    if (_mobileTapAction == value) return;
+    _mobileTapAction = value;
+    notifyListeners();
+    _saveSettings();
+  }
+
+  /// 记录右键菜单集成是否已启用（实际注册由设置页调用系统服务完成）
+  void setAddToContextMenu(bool value) {
+    if (_addToContextMenu == value) return;
+    _addToContextMenu = value;
     notifyListeners();
     _saveSettings();
   }
@@ -334,6 +411,20 @@ class SettingsProvider extends ChangeNotifier {
   void setSharedSort(String folderKey, String sortId) {
     if (_sharedSortModes[folderKey] == sortId) return;
     _sharedSortModes[folderKey] = sortId;
+    _saveSettings();
+  }
+
+  /// 记住某个本地文件夹的浏览格式
+  void setLocalBrowseLayout(String folderPath, BrowseLayout layout) {
+    if (_localBrowseLayouts[folderPath] == layout.name) return;
+    _localBrowseLayouts[folderPath] = layout.name;
+    _saveSettings();
+  }
+
+  /// 记住某个共享文件夹的浏览格式
+  void setSharedBrowseLayout(String folderKey, BrowseLayout layout) {
+    if (_sharedBrowseLayouts[folderKey] == layout.name) return;
+    _sharedBrowseLayouts[folderKey] = layout.name;
     _saveSettings();
   }
 
@@ -454,19 +545,16 @@ class SettingsProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     _playOrder = PlayOrder
         .values[prefs.getInt('playOrder') ?? PlayOrder.newPreferred.index];
+    final resumeIndex = (prefs.getInt('resumePlayback') ?? 0).clamp(
+      0,
+      ResumePlayback.values.length - 1,
+    );
+    _resumePlayback = ResumePlayback.values[resumeIndex];
     _loopPlay = prefs.getBool('loopPlay') ?? false;
     _autoPlay = prefs.getBool('autoPlay') ?? true;
     _videoFitMode = VideoFitMode.values[prefs.getInt('videoFitMode') ?? 0];
     _backgroundColor =
         BackgroundColor.values[prefs.getInt('backgroundColor') ?? 0];
-    // 下标做边界保护：旧版本枚举里还有 slideRight/slideDown，
-    // 若用户存过越界下标，直接取值会 RangeError 导致启动崩溃
-    final animationIndex = (prefs.getInt('transitionAnimation') ?? 1).clamp(
-      0,
-      TransitionAnimation.values.length - 1,
-    );
-    _transitionAnimation = TransitionAnimation.values[animationIndex];
-    _animationDuration = prefs.getDouble('animationDuration') ?? 0.5;
     _startFullscreen = prefs.getBool('startFullscreen') ?? true;
     _hideToolbar = prefs.getBool('hideToolbar') ?? true;
     _controlsHideDelay = prefs.getInt('controlsHideDelay') ?? 3;
@@ -478,6 +566,12 @@ class SettingsProvider extends ChangeNotifier {
       FileListInfo.values.length - 1,
     );
     _fileListInfo = FileListInfo.values[fileListInfoIndex];
+
+    final browseLayoutIndex = (prefs.getInt('browseLayout') ?? 0).clamp(
+      0,
+      BrowseLayout.values.length - 1,
+    );
+    _browseLayout = BrowseLayout.values[browseLayoutIndex];
 
     _lastFolderPath = prefs.getString('lastFolderPath');
     final lastFolderPathsStr = prefs.getString('lastFolderPaths');
@@ -494,9 +588,21 @@ class SettingsProvider extends ChangeNotifier {
 
     _localSortModes = _decodeStringMap(prefs.getString('localSortModes'));
     _sharedSortModes = _decodeStringMap(prefs.getString('sharedSortModes'));
+    _localBrowseLayouts = _decodeStringMap(
+      prefs.getString('localBrowseLayouts'),
+    );
+    _sharedBrowseLayouts = _decodeStringMap(
+      prefs.getString('sharedBrowseLayouts'),
+    );
     _lastCopyDestination = prefs.getString('lastCopyDestination');
 
     _wheelSwitchVideo = prefs.getBool('wheelSwitchVideo') ?? true;
+    final mobileTapIndex = (prefs.getInt('mobileTapAction') ?? 0).clamp(
+      0,
+      MobileTapAction.values.length - 1,
+    );
+    _mobileTapAction = MobileTapAction.values[mobileTapIndex];
+    _addToContextMenu = prefs.getBool('addToContextMenu') ?? false;
     _deleteAction = DeleteAction.values[prefs.getInt('deleteAction') ?? 0];
     _videoOrientation =
         VideoOrientation.values[prefs.getInt('videoOrientation') ?? 2];
@@ -559,12 +665,11 @@ class SettingsProvider extends ChangeNotifier {
   Future<void> _saveSettings() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('playOrder', _playOrder.index);
+    await prefs.setInt('resumePlayback', _resumePlayback.index);
     await prefs.setBool('loopPlay', _loopPlay);
     await prefs.setBool('autoPlay', _autoPlay);
     await prefs.setInt('videoFitMode', _videoFitMode.index);
     await prefs.setInt('backgroundColor', _backgroundColor.index);
-    await prefs.setInt('transitionAnimation', _transitionAnimation.index);
-    await prefs.setDouble('animationDuration', _animationDuration);
     await prefs.setBool('startFullscreen', _startFullscreen);
     await prefs.setBool('hideToolbar', _hideToolbar);
     await prefs.setInt('controlsHideDelay', _controlsHideDelay);
@@ -578,9 +683,20 @@ class SettingsProvider extends ChangeNotifier {
     await prefs.setBool('showVideoInfo', _showVideoInfo);
     await prefs.setInt('languageIndex', _languageIndex);
     await prefs.setBool('wheelSwitchVideo', _wheelSwitchVideo);
+    await prefs.setInt('mobileTapAction', _mobileTapAction.index);
+    await prefs.setBool('addToContextMenu', _addToContextMenu);
     await prefs.setString('excludedPaths', json.encode(_excludedPaths));
     await prefs.setString('localSortModes', json.encode(_localSortModes));
     await prefs.setString('sharedSortModes', json.encode(_sharedSortModes));
+    await prefs.setInt('browseLayout', _browseLayout.index);
+    await prefs.setString(
+      'localBrowseLayouts',
+      json.encode(_localBrowseLayouts),
+    );
+    await prefs.setString(
+      'sharedBrowseLayouts',
+      json.encode(_sharedBrowseLayouts),
+    );
     if (_lastCopyDestination != null) {
       await prefs.setString('lastCopyDestination', _lastCopyDestination!);
     } else {
@@ -600,6 +716,15 @@ class SettingsProvider extends ChangeNotifier {
     );
     await prefs.setString('deviceId', _deviceId);
     await prefs.setString('deviceName', _deviceName);
+  }
+
+  /// 把持久化的浏览格式 id 还原为枚举；未知 id 返回 null
+  static BrowseLayout? parseBrowseLayout(String? id) {
+    if (id == null) return null;
+    for (final layout in BrowseLayout.values) {
+      if (layout.name == id) return layout;
+    }
+    return null;
   }
 
   /// 解析存储为 JSON 的「字符串 → 字符串」映射，数据损坏时返回空表

@@ -129,8 +129,11 @@ class MasonryVideoGrid extends StatelessWidget {
 
   final List<VideoItem> items;
 
-  /// 卡片下方展示的文件信息（单选；[FileListInfo.none] 表示不展示）。
+  /// 卡片下方展示的文件信息（单选；[FileListInfo.none] 表示不展示）
   final FileListInfo fileListInfo;
+
+  /// 浏览格式：瀑布流按视频原始比例，固定画幅则统一裁切为指定比例
+  final BrowseLayout layout;
 
   final int? selectedIndex;
   final ValueChanged<int> onTap;
@@ -174,6 +177,7 @@ class MasonryVideoGrid extends StatelessWidget {
     super.key,
     required this.items,
     this.fileListInfo = FileListInfo.none,
+    this.layout = BrowseLayout.masonry,
     required this.selectedIndex,
     required this.onTap,
     this.onLongPress,
@@ -219,6 +223,8 @@ class MasonryVideoGrid extends StatelessWidget {
         builder: (context, constraints) {
           // 窄屏（<800px）固定2列，否则每400px一列
           final crossAxisCount = crossAxisCountFor(constraints.maxWidth);
+          // 固定画幅时所有卡片共用同一宽高比；瀑布流则沿用视频自身比例
+          final fixedRatio = layout.aspectRatio;
           return CustomScrollView(
             slivers: [
               SliverPadding(
@@ -228,7 +234,9 @@ class MasonryVideoGrid extends StatelessWidget {
                     crossAxisCount: crossAxisCount,
                     crossAxisSpacing: crossAxisSpacing,
                     mainAxisSpacing: mainAxisSpacing,
-                    aspectRatios: items.map((e) => e.aspectRatio).toList(),
+                    aspectRatios: fixedRatio == null
+                        ? items.map((e) => e.aspectRatio).toList()
+                        : List<double?>.filled(items.length, fixedRatio),
                     // 卡片信息块高度：所有卡片一致，直接叠加到视频高度上
                     extraHeight: infoBlockHeightFor(context, fileListInfo),
                   ),
@@ -246,6 +254,9 @@ class MasonryVideoGrid extends StatelessWidget {
                     return _MasonryVideoCard(
                       item: items[index],
                       fileListInfo: fileListInfo,
+                      thumbnailFit: fixedRatio == null
+                          ? BoxFit.fill
+                          : BoxFit.cover,
                       isSelected: selectedIndex == index,
                       onTap: () => onTap(index),
                       onLongPress: onLongPress == null
@@ -297,6 +308,9 @@ class _MasonryVideoCard extends StatefulWidget {
   /// 卡片下方展示的文件信息模式（[FileListInfo.none] 表示不展示信息块）。
   final FileListInfo fileListInfo;
 
+  /// 缩略图填充方式：瀑布流按视频比例铺满，固定画幅裁切填满
+  final BoxFit thumbnailFit;
+
   final bool isSelected;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
@@ -319,6 +333,7 @@ class _MasonryVideoCard extends StatefulWidget {
   const _MasonryVideoCard({
     required this.item,
     required this.fileListInfo,
+    this.thumbnailFit = BoxFit.fill,
     required this.isSelected,
     required this.onTap,
     this.onLongPress,
@@ -460,7 +475,7 @@ class _MasonryVideoCardState extends State<_MasonryVideoCard> {
       }
       return Image.network(
         url,
-        fit: BoxFit.fill,
+        fit: widget.thumbnailFit,
         width: double.infinity,
         height: double.infinity,
         // 服务端缩略图宽度固定为 512，按它限制解码尺寸避免放大解码
@@ -485,7 +500,7 @@ class _MasonryVideoCardState extends State<_MasonryVideoCard> {
     }
     return Image.memory(
       thumbnail.bytes,
-      fit: BoxFit.fill,
+      fit: widget.thumbnailFit,
       width: double.infinity,
       height: double.infinity,
       cacheWidth: MasonryVideoGrid.thumbnailDecodeWidthFor(
@@ -666,7 +681,7 @@ class _MasonryVideoCardState extends State<_MasonryVideoCard> {
               const SizedBox(width: 8),
               _iconButton(
                 Icons.content_copy,
-                Colors.greenAccent,
+                Colors.white,
                 loc.copyTo,
                 widget.onCopy!,
               ),

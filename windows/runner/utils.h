@@ -1,8 +1,18 @@
 #ifndef RUNNER_UTILS_H_
 #define RUNNER_UTILS_H_
 
+#include <windows.h>
+
 #include <string>
 #include <vector>
+
+// Single-instance forwarding: named mutex, main window class, and the
+// WM_COPYDATA identifier used to pass a video path between instances.
+constexpr const wchar_t kSingleInstanceMutexName[] =
+    L"Local\\SteamFlowSingleInstance";
+constexpr const wchar_t kMainWindowClassName[] =
+    L"FLUTTER_RUNNER_WIN32_WINDOW";
+constexpr UINT kSingleInstanceOpenFile = 0x53534631;  // 'SSF1'
 
 // Creates a console for the process, and redirects stdout and stderr to
 // it for both the runner and the Flutter library.

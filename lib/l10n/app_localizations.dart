@@ -105,10 +105,19 @@ class AppLocalizations {
   String get newestFirst => _t('由新到旧', 'Newest First', '由新到舊');
   String get oldestFirst => _t('由旧到新', 'Oldest First', '由舊到新');
   String get newPreferred => _t('新视频优先', 'New Preferred', '新視頻優先');
+  String get resumePlayback => _t('接续播放', 'Resume Playback', '接續播放');
+  String get resumePlaybackDesc => _t(
+    '未播放完毕的视频下次进入时从何处开始播放',
+    'Where an unfinished video starts next time',
+    '未播放完畢的視頻下次進入時從何處開始播放',
+  );
+  String get resumePlaybackFromStart =>
+      _t('从头播放', 'From Start', '從頭播放');
   String get loopPlay => _t('循环播放', 'Loop', '循環播放');
   String get loopPlayDesc =>
       _t('关闭：播完停止；开启：首尾循环', 'Off: stop at end; On: loop', '關閉：播完停止；開啟：首尾循環');
   String get volume => _t('音量', 'Volume', '音量');
+  String get playbackSpeed => _t('播放速度', 'Playback Speed', '播放速度');
   String get singleLoop => _t('单一循环', 'Single Loop', '單一循環');
   String get autoPlay => _t('自动播放', 'Auto Play', '自動播放');
   String get autoPlayDesc =>
@@ -129,12 +138,6 @@ class AppLocalizations {
   String get portrait => _t('竖屏', 'Portrait', '豎屏');
   String get followSystem => _t('跟随系统', 'System', '跟隨係統');
   String get followVideo => _t('跟随视频', 'Follow Video', '跟隨視頻');
-  String get transitionAnimation => _t('切换动画', 'Transition', '切換動畫');
-  String get none => _t('无动画', 'None', '無動畫');
-  String get fade => _t('淡入淡出', 'Fade', '淡入淡出');
-  String get slideLeft => _t('左右滑动', 'Slide Left', '左右滑動');
-  String get slideUp => _t('上下滑动', 'Slide Up', '上下滑動');
-  String get animDuration => _t('动画时长', 'Duration', '動畫時長');
   String get windowFullscreen => _t('工具栏', 'Toolbar', '工具欄');
   String get startFullscreen => _t('播放时自动全屏', 'Auto Fullscreen', '播放時自動全屏');
   String get hideToolbarLabel => _t('自动隐藏工具栏', 'Hide Toolbar', '自動隱藏工具欄');
@@ -150,18 +153,28 @@ class AppLocalizations {
     'Keep controls visible when paused',
     '暫停播放時不自動隱藏播放工具欄',
   );
-  String get filesAndDirs => _t('文件与目录', 'Files & Folders', '文件與目錄');
+  String get filesAndDirs => _t('文件管理', 'File Management', '文件管理');
   String get recursiveScan => _t('包含子文件夹', 'Include Subfolders', '包含子文件夾');
   String get recursiveScanDesc => _t(
     '开启后连子文件夹里的视频一起播放',
     'Play videos from subfolders too',
     '開啟後連子文件夾裡的視頻一起播放',
   );
+  String get browseLayout => _t('浏览格式', 'Browse Layout', '瀏覽格式');
+  String get browseLayoutMasonry => _t('瀑布流', 'Masonry', '瀑布流');
+  String get browseLayoutSquare => _t('正方形', 'Square', '正方形');
+  String get browseLayoutLandscape4x3 =>
+      _t('横屏 4:3', 'Landscape 4:3', '橫屏 4:3');
+  String get browseLayoutLandscape16x9 =>
+      _t('横屏 16:9', 'Landscape 16:9', '橫屏 16:9');
+  String get browseLayoutPortrait3x4 => _t('竖屏 3:4', 'Portrait 3:4', '豎屏 3:4');
+  String get browseLayoutPortrait9x16 =>
+      _t('竖屏 9:16', 'Portrait 9:16', '豎屏 9:16');
   String get fileListInfo => _t('文件列表信息', 'File List Info', '文件列表信息');
   String get fileListInfoDesc => _t(
-    '选中项显示在瀑布流卡片下方',
+    '选中项显示在卡片下方',
     'Show the selected field under each grid card',
-    '選中項顯示在瀑布流卡片下方',
+    '選中項顯示在卡片下方',
   );
   String get fileListInfoNone => _t('不显示', 'None', '不顯示');
   String get fileListInfoName => _t('文件名', 'Name', '文件名');
@@ -181,6 +194,47 @@ class AppLocalizations {
       _t('Ctrl+滚轮：缩放视频', 'Ctrl + Wheel: Zoom', 'Ctrl+滾輪：縮放視頻');
   String get ctrlWheelSwitchHint =>
       _t('Ctrl+滚轮：切换视频', 'Ctrl + Wheel: Switch Video', 'Ctrl+滾輪：切換視頻');
+  String get mobileTapBehavior => _t('短按行为', 'Tap Action', '短按行為');
+  String get mobileTapPlay => _t('播放', 'Play', '播放');
+  String get mobileTapSelect => _t('选中', 'Select', '選中');
+  String get mobileTapPlayDesc => _t('长按选中', 'Long press to select', '長按選中');
+  String get mobileTapSelectDesc =>
+      _t('长按或再次短按播放', 'Long press or tap again to play', '長按或再次短按播放');
+  // Windows 桌面端：右键菜单与默认打开方式
+  /// 注册到系统注册表的右键菜单项文字（写入注册表后需重装才会更新）
+  String get contextMenuOpenWith =>
+      _t('用 SteamFlow 播放', 'Open with SteamFlow', '用 SteamFlow 播放');
+
+  /// ProgID 的文件类型显示名（出现在「打开方式」等系统界面）
+  String get videoFileTypeName =>
+      _t('SteamFlow 视频文件', 'SteamFlow Video', 'SteamFlow 視頻檔案');
+
+  /// 「默认应用」列表中展示的应用说明
+  String get videoPlayerDescription =>
+      _t('SteamFlow 视频播放器', 'SteamFlow video player', 'SteamFlow 視頻播放器');
+
+  String get addToContextMenu =>
+      _t('添加到右键菜单', 'Add to Context Menu', '添加到右鍵菜單');
+  String get addToContextMenuDesc => _t(
+    '在支持视频格式的右键菜单中增加一项：用 SteamFlow 播放',
+    'Add "Play with SteamFlow" to the context menu of supported video formats',
+    '在支援視頻格式的右鍵菜單中增加一項：用 SteamFlow 播放',
+  );
+  String get contextMenuFailed =>
+      _t('操作失败，请检查系统权限', 'Failed. Check system permissions', '操作失敗，請檢查系統權限');
+  String get setDefaultPlayer =>
+      _t('设为默认播放器', 'Set as Default Player', '設為預設播放器');
+  String get setDefaultPlayerDesc => _t(
+    '请在系统默认应用>视频播放器>选中SteamFlow',
+    'Choose SteamFlow in Default Apps > Video Player',
+    '請在系統預設應用程式>視頻播放器>選中SteamFlow',
+  );
+  String get defaultAppOpen => _t('去设置', 'Open Settings', '前往設定');
+  String get defaultAppSettingsOpened => _t(
+    '已打开系统「默认应用」页面，请在其中选择 SteamFlow',
+    'Default Apps opened. Please choose SteamFlow there.',
+    '已開啟系統「預設應用程式」頁面，請在其中選擇 SteamFlow',
+  );
   String get deleteBehavior => _t('删除行为', 'Delete', '刪除行為');
   String get ctrlDelDeleteHint =>
       _t('Ctrl+Del：实际删除', 'Ctrl + Del: Delete File', 'Ctrl+Del：實際刪除');
@@ -205,6 +259,7 @@ class AppLocalizations {
   String get next => _t('下一个', 'Next', '下一個');
   String get exitFullscreen => _t('退出全屏', 'Exit Fullscreen', '退出全屏');
   String get exitPlayback => _t('退出播放', 'Exit Playback', '退出播放');
+  String get closeApp => _t('关闭', 'Close', '關閉');
   String get enterFullscreen => _t('全屏', 'Fullscreen', '全屏');
   String get rotate => _t('旋转', 'Rotate', '旋轉');
   String get rotateRight => _t('向右旋转', 'Rotate Right', '向右旋轉');
@@ -270,7 +325,7 @@ class AppLocalizations {
       _t('恢复此文件夹的文件', 'Restore Files in Folder', '恢復此文件夾的文件');
   String get deleteFiles =>
       _t('删除此文件夹的文件', 'Delete Files in Folder', '刪除此文件夾的文件');
-  String get removeFromManage => _t('从管理移除', 'Remove from List', '從管理移除');
+  String get removeFromManage => _t('取消管理', 'Stop Managing', '取消管理');
   String get deleteAll => _t('删除全部', 'Delete All', '刪除全部');
   String get moveAllTo => _t('全部移动到', 'Move All To', '全部移動到');
   String get copyAllTo => _t('全部复制到', 'Copy All To', '全部複製到');
@@ -347,14 +402,9 @@ class AppLocalizations {
     '滑鼠滾輪可設為切換視頻或縮放視頻，按住 Ctrl（或 Shift）滾動執行相反操作',
   );
   String get helpTransition => _t(
-    '淡入淡出、左右滑动、上下滑动、无动画',
-    'Fade, slide horizontally, slide vertically, none',
-    '淡入淡出、左右滑動、上下滑動、無動畫',
-  );
-  String get helpAnimDuration => _t(
-    '动画时长 0.1～1.0 秒可调',
-    'Animation duration adjustable from 0.1s to 1.0s',
-    '動畫時長 0.1～1.0 秒可調',
+    '滚轮/手势切换为上下滑动，工具栏与方向键为左右滑动，自动切换为淡入淡出，统一 0.3 秒',
+    'Wheel/gesture slides vertically, toolbar and arrow keys slide horizontally, auto switch fades; all last 0.3s',
+    '滾輪/手勢切換為上下滑動，工具欄與方向鍵為左右滑動，自動切換為淡入淡出，統一 0.3 秒',
   );
   String get helpFullscreen => _t(
     'Windows 支持真·全屏，可设置进入播放时自动全屏',
@@ -465,16 +515,15 @@ class AppLocalizations {
   String get allowRemoteExcludeLabel =>
       _t('允许远程排除播放', 'Allow Remote Exclude', '允許遠端排除播放');
   String get allowRemoteExcludeDesc => _t(
-    '允许其他设备把这里的视频加入本机排除列表（不删除文件）',
-    'Allow other devices to exclude videos from this device\'s playlist (files are kept)',
-    '允許其他設備把這裡的視頻加入本機排除列表（不刪除檔案）',
+    '便于远程管理，不会实际删除文件，可一键恢复',
+    'Easy remote management; files are not deleted and can be restored anytime',
+    '便於遠程管理，不會實際刪除檔案，可一鍵恢復',
   );
-  String get allowRemoteCopyLabel =>
-      _t('允许远程复制', 'Allow Remote Copy', '允許遠端複製');
+  String get allowRemoteCopyLabel => _t('允许下载', 'Allow Downloads', '允許下載');
   String get allowRemoteCopyDesc => _t(
-    '允许其他设备把这里的视频复制到它自己的设备',
-    'Allow other devices to copy videos from this device',
-    '允許其他設備把這裡的視頻複製到它自己的設備',
+    '允许内网其他终端下载本机视频',
+    'Allow other devices on the LAN to download videos from this device',
+    '允許內網其他終端下載本機視頻',
   );
   String get lanNoDevices => _t('未发现内网设备', 'No devices found', '未發現內網設備');
   String get lanManualAdd => _t('手动添加设备', 'Add Device Manually', '手動添加設備');
@@ -505,6 +554,11 @@ class AppLocalizations {
   String get sharedFoldersSection => _t('共享文件夹', 'Shared Folders', '共享文件夾');
   String get lanReconnectFolder => _t('重新连接', 'Reconnect', '重新連接');
   String get lanReconnectAll => _t('重新连接全部', 'Reconnect all', '重新連接全部');
+  String get lanReconnectFailed => _t(
+    '重连失败，请确认共享设备在线',
+    'Reconnect failed. Check the shared device is online',
+    '重連失敗，請確認共享設備在線',
+  );
   String get lanRemoteUnsupported => _t(
     '远程视频暂不支持该操作',
     'This action is not supported for remote videos yet',

@@ -80,7 +80,6 @@ void main() {
       l10n.languageLabel,
       l10n.playSettings,
       l10n.videoDisplay,
-      l10n.transitionAnimation,
       l10n.windowFullscreen,
       l10n.filesAndDirs,
       l10n.controlsLabel,
@@ -115,7 +114,7 @@ void main() {
       expect(inColumn(other, title), findsNothing, reason: '$title 不应出现在另一栏');
     }
 
-    // 左栏（第 1 栏）应包含这些分组（「文件与目录」按需求钉在左栏）。
+    // 左栏（第 1 栏）应包含这些分组（「文件管理」按需求钉在左栏）。
     for (final title in [
       'languageLabel',
       'videoDisplay',
@@ -125,7 +124,7 @@ void main() {
       expectOnlyIn(left, right, _titleOf(l10n, title));
     }
     // 右栏（第 2 栏）应包含这些分组。
-    for (final title in ['playSettings', 'transitionAnimation']) {
+    for (final title in ['playSettings', 'controlsLabel']) {
       expectOnlyIn(right, left, _titleOf(l10n, title));
     }
 
@@ -146,8 +145,8 @@ String _titleOf(AppLocalizations l10n, String name) {
       return l10n.playSettings;
     case 'videoDisplay':
       return l10n.videoDisplay;
-    case 'transitionAnimation':
-      return l10n.transitionAnimation;
+    case 'controlsLabel':
+      return l10n.controlsLabel;
     case 'windowFullscreen':
       return l10n.windowFullscreen;
     case 'filesAndDirs':

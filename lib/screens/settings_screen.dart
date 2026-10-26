@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:steam_flow/providers/settings_provider.dart';
+import 'package:steam_flow/services/windows_context_menu_service.dart';
 import 'package:steam_flow/l10n/app_localizations.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -41,7 +42,7 @@ class SettingsScreen extends StatelessWidget {
   ///
   /// [weight] 是各分组高度的粗略估算，仅用于宽屏分栏时把分组均衡地分到各列；
   /// 分组也可用 [_SettingsGroup.preferredColumn] 固定到指定列（如下方的
-  /// 「文件与目录」钉在左栏，两列高度更接近）。
+  /// 「文件管理」钉在左栏，两列高度更接近）。
   List<_SettingsGroup> _sectionGroups(BuildContext context) {
     return [
       // 语言设置
@@ -60,7 +61,25 @@ class SettingsScreen extends StatelessWidget {
                 ('English', 2),
               ],
               settings.languageIndex,
-              (value) => settings.setLanguageIndex(value),
+              (value) async {
+                settings.setLanguageIndex(value);
+                if (!Platform.isWindows) return;
+                // 注册表里存的是静态文本，语言切换后按新语言重写一遍
+                final loc = AppLocalizations.fromIndex(value);
+                if (settings.addToContextMenu) {
+                  await WindowsContextMenuService.instance.install(
+                    menuText: loc.contextMenuOpenWith,
+                  );
+                }
+                if (await WindowsContextMenuService.instance
+                    .hasDefaultAppRegistration()) {
+                  await WindowsContextMenuService.instance
+                      .installDefaultAppRegistration(
+                        typeName: loc.videoFileTypeName,
+                        description: loc.videoPlayerDescription,
+                      );
+                }
+              },
             ),
           ),
         ],
@@ -180,9 +199,9 @@ class SettingsScreen extends StatelessWidget {
           ),
         ],
       ),
-      // 文件与目录相关（钉在左栏：该组较矮，放左栏可让两列高度更接近）
+      // 文件管理相关（钉在左栏：该组较矮，放左栏可让两列高度更接近）
       _SettingsGroup(
-        weight: 2,
+        weight: 3,
         preferredColumn: 0,
         widgets: [
           _buildSectionTitle(AppLocalizations.of(context).filesAndDirs),
@@ -216,6 +235,38 @@ class SettingsScreen extends StatelessWidget {
                   settings.fileListInfo,
                   (value) => settings.setFileListInfo(value),
                   subtitle: AppLocalizations.of(context).fileListInfoDesc,
+                ),
+                _buildDropdownSetting(
+                  context,
+                  AppLocalizations.of(context).browseLayout,
+                  [
+                    (
+                      AppLocalizations.of(context).browseLayoutMasonry,
+                      BrowseLayout.masonry,
+                    ),
+                    (
+                      AppLocalizations.of(context).browseLayoutSquare,
+                      BrowseLayout.square,
+                    ),
+                    (
+                      AppLocalizations.of(context).browseLayoutLandscape4x3,
+                      BrowseLayout.landscape4x3,
+                    ),
+                    (
+                      AppLocalizations.of(context).browseLayoutLandscape16x9,
+                      BrowseLayout.landscape16x9,
+                    ),
+                    (
+                      AppLocalizations.of(context).browseLayoutPortrait3x4,
+                      BrowseLayout.portrait3x4,
+                    ),
+                    (
+                      AppLocalizations.of(context).browseLayoutPortrait9x16,
+                      BrowseLayout.portrait9x16,
+                    ),
+                  ],
+                  settings.browseLayout,
+                  (value) => settings.setBrowseLayout(value),
                 ),
               ],
             ),
@@ -268,6 +319,23 @@ class SettingsScreen extends StatelessWidget {
                   settings.playOrder,
                   (value) => settings.setPlayOrder(value),
                 ),
+                _buildDropdownSetting(
+                  context,
+                  AppLocalizations.of(context).resumePlayback,
+                  [
+                    (
+                      AppLocalizations.of(context).resumePlayback,
+                      ResumePlayback.resume,
+                    ),
+                    (
+                      AppLocalizations.of(context).resumePlaybackFromStart,
+                      ResumePlayback.restart,
+                    ),
+                  ],
+                  settings.resumePlayback,
+                  (value) => settings.setResumePlayback(value),
+                  subtitle: AppLocalizations.of(context).resumePlaybackDesc,
+                ),
                 _buildSwitchSetting(
                   context,
                   AppLocalizations.of(context).loopPlay,
@@ -291,53 +359,6 @@ class SettingsScreen extends StatelessWidget {
                     settings.startFullscreen,
                     (value) => settings.setStartFullscreen(value),
                   ),
-              ],
-            ),
-          ),
-        ],
-      ),
-      // 切换动画
-      _SettingsGroup(
-        weight: 3,
-        widgets: [
-          _buildSectionTitle(AppLocalizations.of(context).transitionAnimation),
-          Consumer<SettingsProvider>(
-            builder: (context, settings, child) => Column(
-              children: [
-                _buildDropdownSetting(
-                  context,
-                  AppLocalizations.of(context).transitionAnimation,
-                  [
-                    (
-                      AppLocalizations.of(context).none,
-                      TransitionAnimation.none,
-                    ),
-                    (
-                      AppLocalizations.of(context).fade,
-                      TransitionAnimation.fade,
-                    ),
-                    (
-                      AppLocalizations.of(context).slideLeft,
-                      TransitionAnimation.slideLeft,
-                    ),
-                    (
-                      AppLocalizations.of(context).slideUp,
-                      TransitionAnimation.slideUp,
-                    ),
-                  ],
-                  settings.transitionAnimation,
-                  (value) => settings.setTransitionAnimation(value),
-                ),
-                _buildSliderSetting(
-                  context,
-                  AppLocalizations.of(context).animDuration,
-                  '${settings.animationDuration.toStringAsFixed(1)}${AppLocalizations.of(context).second}',
-                  settings.animationDuration,
-                  0.1,
-                  1.0,
-                  0.1,
-                  (value) => settings.setAnimationDuration(value),
-                ),
               ],
             ),
           ),
@@ -368,6 +389,28 @@ class SettingsScreen extends StatelessWidget {
                         ? AppLocalizations.of(context).ctrlWheelZoomHint
                         : AppLocalizations.of(context).ctrlWheelSwitchHint,
                   ),
+                // 手机端没有滚轮，改为提供卡片短按行为设置
+                if (_isMobile)
+                  _buildDropdownSetting(
+                    context,
+                    AppLocalizations.of(context).mobileTapBehavior,
+                    [
+                      (
+                        AppLocalizations.of(context).mobileTapPlay,
+                        MobileTapAction.play,
+                      ),
+                      (
+                        AppLocalizations.of(context).mobileTapSelect,
+                        MobileTapAction.select,
+                      ),
+                    ],
+                    settings.mobileTapAction,
+                    (value) => settings.setMobileTapAction(value),
+                    // 副标题说明长按的作用，随当前选项变化
+                    subtitle: settings.mobileTapAction == MobileTapAction.play
+                        ? AppLocalizations.of(context).mobileTapPlayDesc
+                        : AppLocalizations.of(context).mobileTapSelectDesc,
+                  ),
                 _buildDropdownSetting(
                   context,
                   AppLocalizations.of(context).deleteBehavior,
@@ -391,6 +434,74 @@ class SettingsScreen extends StatelessWidget {
                             ? AppLocalizations.of(context).ctrlDelDeleteHint
                             : AppLocalizations.of(context).ctrlDelExcludeHint),
                 ),
+                // 仅 Windows 桌面端支持写入右键菜单（HKCU，无需管理员权限）
+                if (Platform.isWindows)
+                  _buildSwitchSetting(
+                    context,
+                    AppLocalizations.of(context).addToContextMenu,
+                    AppLocalizations.of(context).addToContextMenuDesc,
+                    settings.addToContextMenu,
+                    (value) async {
+                      // 先取得依赖上下文的对象，避免异步完成后页面已销毁
+                      final messenger = ScaffoldMessenger.of(context);
+                      final loc = AppLocalizations.of(context);
+                      final ok = value
+                          ? await WindowsContextMenuService.instance.install(
+                              menuText: loc.contextMenuOpenWith,
+                            )
+                          : await WindowsContextMenuService.instance
+                                .uninstall();
+                      if (!ok) {
+                        messenger.showSnackBar(
+                          SnackBar(
+                            content: Text(loc.contextMenuFailed),
+                            backgroundColor: Colors.red,
+                          ),
+                        );
+                        return;
+                      }
+                      settings.setAddToContextMenu(value);
+                    },
+                  ),
+                // 注册为候选默认播放器，最终由用户在系统设置中确认
+                if (Platform.isWindows)
+                  _buildActionSetting(
+                    context,
+                    AppLocalizations.of(context).setDefaultPlayer,
+                    AppLocalizations.of(context).setDefaultPlayerDesc,
+                    AppLocalizations.of(context).defaultAppOpen,
+                    () async {
+                      // 先取得依赖上下文的对象，避免异步完成后页面已销毁
+                      final messenger = ScaffoldMessenger.of(context);
+                      final loc = AppLocalizations.of(context);
+                      final ok = await WindowsContextMenuService.instance
+                          .installDefaultAppRegistration(
+                            typeName: loc.videoFileTypeName,
+                            description: loc.videoPlayerDescription,
+                          );
+                      if (!ok) {
+                        messenger.showSnackBar(
+                          SnackBar(
+                            content: Text(loc.contextMenuFailed),
+                            backgroundColor: Colors.red,
+                          ),
+                        );
+                        return;
+                      }
+                      final opened = await WindowsContextMenuService.instance
+                          .openDefaultAppsSettings();
+                      messenger.showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            opened
+                                ? loc.defaultAppSettingsOpened
+                                : loc.contextMenuFailed,
+                          ),
+                          backgroundColor: opened ? null : Colors.red,
+                        ),
+                      );
+                    },
+                  ),
                 // 内置快捷键说明全部是键盘按键，手机端不展示
                 if (!_isMobile) _buildShortcutInfo(context),
               ],
@@ -547,6 +658,53 @@ class SettingsScreen extends StatelessWidget {
                   activeThumbColor: const Color(0xFFe94560),
                 ),
               ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 右侧为操作按钮的设置项，宽度与开关项保持一致
+  Widget _buildActionSetting(
+    BuildContext context,
+    String title,
+    String subtitle,
+    String buttonLabel,
+    VoidCallback onPressed,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: Theme.of(context).textTheme.bodyLarge),
+                if (subtitle.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      subtitle,
+                      style: const TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          SizedBox(
+            width: 100,
+            child: OutlinedButton(
+              onPressed: onPressed,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFFe94560),
+                side: const BorderSide(color: Color(0xFFe94560)),
+                padding: EdgeInsets.zero,
+                minimumSize: const Size(0, 36),
+              ),
+              child: Text(buttonLabel),
             ),
           ),
         ],
