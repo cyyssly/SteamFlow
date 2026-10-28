@@ -9,6 +9,7 @@ import 'package:steam_flow/providers/slide_provider.dart';
 import 'package:steam_flow/services/fullscreen_service.dart';
 import 'package:steam_flow/services/video_scan_service.dart';
 import 'package:steam_flow/services/media_store_service.dart';
+import 'package:steam_flow/utils/filename_compare.dart';
 import 'package:steam_flow/widgets/browse_layout_icon.dart';
 import 'package:steam_flow/widgets/masonry_video_grid.dart';
 import 'package:steam_flow/widgets/sort_alphabet_icon.dart';
@@ -368,10 +369,10 @@ class _FolderVideosScreenState extends State<FolderVideosScreen>
   void _applySortToAllItems() {
     switch (_sortAction) {
       case _SortAction.nameAsc:
-        _allItems.sort((a, b) => a.name.compareTo(b.name));
+        _allItems.sort((a, b) => compareFileNames(a.name, b.name));
         break;
       case _SortAction.nameDesc:
-        _allItems.sort((a, b) => b.name.compareTo(a.name));
+        _allItems.sort((a, b) => compareFileNames(b.name, a.name));
         break;
       case _SortAction.timeNewest:
         _allItems.sort(

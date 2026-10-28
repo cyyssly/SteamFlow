@@ -16,6 +16,7 @@ import 'package:steam_flow/services/desktop_tray_service.dart';
 import 'package:steam_flow/services/playback_progress_service.dart';
 import 'package:steam_flow/services/remote_copy_service.dart';
 import 'package:steam_flow/services/single_instance_service.dart';
+import 'package:steam_flow/services/track_pref_service.dart';
 import 'package:steam_flow/services/video_formats.dart';
 import 'package:steam_flow/services/windows_context_menu_service.dart';
 import 'package:steam_flow/l10n/app_localizations.dart';
@@ -48,6 +49,9 @@ Future<void> main(List<String> args) async {
 
   // 读取已保存的视频进度（「接续播放」使用），播放页查询时走内存
   await PlaybackProgressService.instance.load();
+
+  // 读取每个视频的音轨 / 字幕偏好
+  await TrackPrefService.instance.load();
 
   // 右键菜单命令记录的是注册时的 exe 绝对路径，便携版被移动过目录后
   // 旧路径就会失效。启动时：
@@ -119,6 +123,7 @@ Future<void> main(List<String> args) async {
       SingleInstanceService.instance.attach(
         navigatorKey: appNavigatorKey,
         slideProvider: slideProvider,
+        settingsProvider: settingsProvider,
       ),
     );
   });

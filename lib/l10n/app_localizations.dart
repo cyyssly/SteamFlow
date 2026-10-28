@@ -118,6 +118,10 @@ class AppLocalizations {
       _t('关闭：播完停止；开启：首尾循环', 'Off: stop at end; On: loop', '關閉：播完停止；開啟：首尾循環');
   String get volume => _t('音量', 'Volume', '音量');
   String get playbackSpeed => _t('播放速度', 'Playback Speed', '播放速度');
+  String get showMenu => _t('菜单', 'Menu', '選單');
+  String get audioTrack => _t('声道', 'Audio', '聲道');
+  String get subtitleTrack => _t('字幕', 'Subtitle', '字幕');
+  String get subtitleOff => _t('关闭', 'Off', '關閉');
   String get singleLoop => _t('单一循环', 'Single Loop', '單一循環');
   String get autoPlay => _t('自动播放', 'Auto Play', '自動播放');
   String get autoPlayDesc =>
@@ -261,6 +265,10 @@ class AppLocalizations {
   String get exitPlayback => _t('退出播放', 'Exit Playback', '退出播放');
   String get closeApp => _t('关闭', 'Close', '關閉');
   String get enterFullscreen => _t('全屏', 'Fullscreen', '全屏');
+  String get toggleScreenLandscape =>
+      _t('切到横屏', 'Switch to Landscape', '切到橫屏');
+  String get toggleScreenPortrait =>
+      _t('切到竖屏', 'Switch to Portrait', '切到豎屏');
   String get rotate => _t('旋转', 'Rotate', '旋轉');
   String get rotateRight => _t('向右旋转', 'Rotate Right', '向右旋轉');
   String get rotateLeft => _t('向左旋转', 'Rotate Left', '向左旋轉');
@@ -305,7 +313,7 @@ class AppLocalizations {
   String get msgNeedPermission =>
       _t('需要存储读取权限', 'Permission required', '需要存儲讀取權限');
   String get msgNoAlbumsFound =>
-      _t('未找到包含视频的相册', 'No albums found', '未找到包含視頻的相冊');
+      _t('未找到包含视频的文件夹', 'No folders found with videos', '未找到包含視頻的資料夾');
   String msgScanFailed(Object e) => _t('扫描失败: $e', 'Failed: $e', '掃描失敗: $e');
 
   // 排除视频浏览

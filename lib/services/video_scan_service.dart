@@ -12,10 +12,15 @@ class VideoScanService {
   /// 扫描结果会剔除 [SettingsProvider.excludedPaths] 中记录的视频：
   /// 排除操作只是把路径记进设置，若不在扫描时过滤，退出页面重新进入后
   /// 被排除的视频会再次出现。
+  ///
+  /// [recursiveOverride] 为非 null 时强制指定是否递归扫描；为 null 时跟随
+  /// [SettingsProvider.recursiveScan]。文件直开场景需"只扫当前目录"，
+  /// 传 `false` 即可独立于全局设置。
   static Future<List<VideoItem>> scanFolder(
     String folderPath,
-    SettingsProvider settings,
-  ) async {
+    SettingsProvider settings, {
+    bool? recursiveOverride,
+  }) async {
     // Windows 文件路径不区分大小写，统一转小写比较，避免因大小写差异漏过滤
     final excluded = {
       for (final path in settings.excludedPaths)
@@ -37,7 +42,8 @@ class VideoScanService {
     // 桌面端使用文件系统 API
     List<File> files = [];
     final dir = Directory(folderPath);
-    if (settings.recursiveScan) {
+    final recursive = recursiveOverride ?? settings.recursiveScan;
+    if (recursive) {
       await for (var entity in dir.list(recursive: true)) {
         if (entity is File) {
           files.add(entity);

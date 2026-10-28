@@ -10,6 +10,7 @@ import 'package:steam_flow/models/video_item.dart';
 import 'package:steam_flow/providers/settings_provider.dart';
 import 'package:steam_flow/providers/slide_provider.dart';
 import 'package:steam_flow/services/lan_client_service.dart';
+import 'package:steam_flow/utils/filename_compare.dart';
 import 'package:steam_flow/services/lan_discovery_service.dart';
 import 'package:steam_flow/services/lan_protocol.dart';
 import 'package:steam_flow/services/lan_server_service.dart';
@@ -106,7 +107,7 @@ class LanProvider extends ChangeNotifier with WidgetsBindingObserver {
       merged.putIfAbsent('${device.host}:${device.port}', () => device);
     }
     final list = merged.values.toList()
-      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      ..sort((a, b) => compareFileNames(a.name, b.name));
     return list;
   }
 

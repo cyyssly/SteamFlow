@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:steam_flow/models/video_item.dart';
 import 'package:steam_flow/providers/settings_provider.dart';
+import 'package:steam_flow/utils/filename_compare.dart';
 
 class SlideProvider extends ChangeNotifier {
   List<VideoItem> _videos = [];
@@ -295,7 +296,7 @@ class SlideProvider extends ChangeNotifier {
     int low = 0, high = _videos.length;
     while (low < high) {
       final mid = (low + high) ~/ 2;
-      if (_videos[mid].name.compareTo(name) < 0) {
+      if (compareFileNames(_videos[mid].name, name) < 0) {
         low = mid + 1;
       } else {
         high = mid;
@@ -309,7 +310,7 @@ class SlideProvider extends ChangeNotifier {
     int low = 0, high = _videos.length;
     while (low < high) {
       final mid = (low + high) ~/ 2;
-      if (_videos[mid].name.compareTo(name) > 0) {
+      if (compareFileNames(_videos[mid].name, name) > 0) {
         low = mid + 1;
       } else {
         high = mid;
@@ -393,12 +394,12 @@ class SlideProvider extends ChangeNotifier {
   void sortByPlayOrder(PlayOrder order) {
     switch (order) {
       case PlayOrder.sequential:
-        // 按文件名排序（默认）
-        _videos.sort((a, b) => a.name.compareTo(b.name));
+        // 按文件名排序（默认）——中文拼音 + 自然排序
+        _videos.sort((a, b) => compareFileNames(a.name, b.name));
         break;
       case PlayOrder.reverseSequential:
         // 按文件名逆序
-        _videos.sort((a, b) => b.name.compareTo(a.name));
+        _videos.sort((a, b) => compareFileNames(b.name, a.name));
         break;
       case PlayOrder.newestFirst:
         // 按修改时间从新到旧

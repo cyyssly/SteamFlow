@@ -9,6 +9,8 @@
 **/build/
 # Release distribution artifacts
 /release/
+# Local test fixtures (sample videos / screenshots), not part of the project
+/test_assets/
 *.bak
 .DS_Store
 .atom/

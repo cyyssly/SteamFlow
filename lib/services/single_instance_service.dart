@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:steam_flow/models/video_item.dart';
+import 'package:steam_flow/providers/settings_provider.dart';
 import 'package:steam_flow/providers/slide_provider.dart';
+import 'package:steam_flow/services/open_video_from_path.dart';
 import 'package:steam_flow/services/video_formats.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -22,6 +24,7 @@ class SingleInstanceService {
 
   GlobalKey<NavigatorState>? _navigatorKey;
   SlideProvider? _slideProvider;
+  SettingsProvider? _settingsProvider;
   String? _pendingPath;
 
   // 同一个路径可能同时来自实时回调与 takePendingPath，做一次短时去重
@@ -39,14 +42,16 @@ class SingleInstanceService {
     });
   }
 
-  /// runApp 之后调用：绑定导航与播放状态，并补取启动早期收到的路径。
+  /// runApp 之后调用：绑定导航、播放状态与设置，并补取启动早期收到的路径。
   Future<void> attach({
     required GlobalKey<NavigatorState> navigatorKey,
     required SlideProvider slideProvider,
+    required SettingsProvider settingsProvider,
   }) async {
     if (!Platform.isWindows) return;
     _navigatorKey = navigatorKey;
     _slideProvider = slideProvider;
+    _settingsProvider = settingsProvider;
 
     final queued = _pendingPath;
     _pendingPath = null;
@@ -67,7 +72,8 @@ class SingleInstanceService {
   void _handle(String path) {
     final navigator = _navigatorKey?.currentState;
     final slide = _slideProvider;
-    if (navigator == null || slide == null) {
+    final settings = _settingsProvider;
+    if (navigator == null || slide == null || settings == null) {
       // Dart 还没准备好导航，先暂存
       _pendingPath = path;
       return;
@@ -83,12 +89,13 @@ class SingleInstanceService {
     _lastOpenedPath = path;
     _lastOpenedAt = now;
 
-    _openVideo(navigator, slide, path);
+    unawaited(_openVideo(navigator, slide, settings, path));
   }
 
   Future<void> _openVideo(
     NavigatorState navigator,
     SlideProvider slide,
+    SettingsProvider settings,
     String path,
   ) async {
     // 应用可能收在托盘里，先恢复并聚焦窗口
@@ -100,12 +107,13 @@ class SingleInstanceService {
     }
     if (!navigator.mounted) return;
 
-    // 关掉当前播放页（以及可能存在的弹层），再播放新文件
-    navigator.popUntil((route) => route.isFirst);
-    slide.setVideos([
-      VideoItem(name: path.split(Platform.pathSeparator).last, path: path),
-    ]);
-    slide.startPlay();
-    navigator.pushNamed('/player');
+    await OpenVideoFromPath.openVideo(
+      navigator: navigator,
+      slideProvider: slide,
+      settings: settings,
+      videoPath: path,
+      // 单实例转发：关掉当前播放页（以及可能存在的弹层），再进入新视频
+      popFirst: true,
+    );
   }
 }

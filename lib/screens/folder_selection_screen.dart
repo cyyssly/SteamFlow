@@ -13,6 +13,7 @@ import 'package:steam_flow/screens/folder_videos_screen.dart';
 import 'package:steam_flow/screens/remote_browser_screen.dart';
 import 'package:steam_flow/screens/remote_videos_screen.dart';
 import 'package:steam_flow/services/directory_picker_service.dart';
+import 'package:steam_flow/utils/filename_compare.dart';
 import 'package:steam_flow/services/media_store_service.dart';
 import 'package:steam_flow/services/video_formats.dart';
 import 'package:steam_flow/services/video_scan_service.dart';
@@ -629,7 +630,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
         return;
       }
       final videos = unique.values.toList()
-        ..sort((a, b) => a.name.compareTo(b.name));
+        ..sort((a, b) => compareFileNames(a.name, b.name));
       slide.setVideos(videos, playOrder: settings.playOrder);
       slide.sortByPlayOrder(settings.playOrder);
       slide.goToVideo(0);
@@ -666,7 +667,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
         return;
       }
       final videos = unique.values.toList()
-        ..sort((a, b) => a.name.compareTo(b.name));
+        ..sort((a, b) => compareFileNames(a.name, b.name));
       slide.setVideos(videos, playOrder: settings.playOrder);
       slide.sortByPlayOrder(settings.playOrder);
       slide.goToVideo(0);
@@ -1151,7 +1152,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
           if (hasStartedPlaying &&
               uniqueVideos.length - lastUpdateCount >= 10) {
             final newVideos = uniqueVideos.values.toList()
-              ..sort((a, b) => a.name.compareTo(b.name));
+              ..sort((a, b) => compareFileNames(a.name, b.name));
             slideProvider.setVideos(newVideos);
             lastUpdateCount = uniqueVideos.length;
           }
@@ -1184,7 +1185,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
 
       // 按文件名排序
       final sortedVideos = uniqueVideos.values.toList()
-        ..sort((a, b) => a.name.compareTo(b.name));
+        ..sort((a, b) => compareFileNames(a.name, b.name));
 
       if (sortedVideos.isEmpty) {
         if (!mounted) return;
@@ -1251,7 +1252,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
   ) async {
     // 对已收集的视频进行排序
     final sortedVideos = videos.toList()
-      ..sort((a, b) => a.name.compareTo(b.name));
+      ..sort((a, b) => compareFileNames(a.name, b.name));
 
     slideProvider.setVideos(sortedVideos);
     settingsProvider.setLastFolderPaths(slideProvider.folderPaths);

@@ -10,6 +10,7 @@ import 'package:steam_flow/services/lan_protocol.dart';
 import 'package:steam_flow/services/media_store_service.dart';
 import 'package:steam_flow/services/video_formats.dart';
 import 'package:steam_flow/services/video_thumbnail_service.dart';
+import 'package:steam_flow/utils/filename_compare.dart';
 
 /// 缩略图转码任务（可在后台 isolate 执行）
 class _ThumbTask {
@@ -233,7 +234,7 @@ class LanServerService {
                 isSupportedVideoPath(item.path) && !_isExcluded(item.path),
           )
           .toList()
-        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+        ..sort((a, b) => compareFileNames(a.name, b.name));
     }
 
     final dir = Directory(folder);
@@ -315,7 +316,7 @@ class LanServerService {
       case 'name':
         sorted = [
           ...videos,
-        ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+        ]..sort((a, b) => compareFileNames(a.name, b.name));
         if (descending) sorted = sorted.reversed.toList();
         break;
       case 'size':
