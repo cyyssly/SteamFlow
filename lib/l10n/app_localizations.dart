@@ -133,10 +133,6 @@ class AppLocalizations {
   String get contain => _t('适应窗口', 'Contain', '適應窗口');
   String get cover => _t('填满窗口', 'Cover', '填滿窗口');
   String get original => _t('原始大小', 'Original', '原始大小');
-  String get backgroundColorLabel => _t('背景底色', 'Background', '背景底色');
-  String get black => _t('黑色', 'Black', '黑色');
-  String get darkGray => _t('深灰', 'Dark Gray', '深灰');
-  String get white => _t('白色', 'White', '白色');
   String get orientationLabel => _t('屏幕方向', 'Orientation', '屏幕方向');
   String get landscape => _t('横屏', 'Landscape', '橫屏');
   String get portrait => _t('竖屏', 'Portrait', '豎屏');
@@ -274,6 +270,7 @@ class AppLocalizations {
   String get rotateLeft => _t('向左旋转', 'Rotate Left', '向左旋轉');
   String get zoomIn => _t('放大', 'Zoom In', '放大');
   String get zoomOut => _t('缩小', 'Zoom Out', '縮小');
+  String get flipVertical => _t('上下翻转', 'Flip Vertical', '上下翻轉');
   String get fitScreen => _t('适应屏幕', 'Fit Screen', '適應屏幕');
   String get errorRange => _t(
     '须为大于1且小于65535的整数',

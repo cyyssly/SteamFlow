@@ -112,20 +112,6 @@ class SettingsScreen extends StatelessWidget {
                 ),
                 _buildDropdownSetting(
                   context,
-                  AppLocalizations.of(context).backgroundColorLabel,
-                  [
-                    (AppLocalizations.of(context).black, BackgroundColor.black),
-                    (
-                      AppLocalizations.of(context).darkGray,
-                      BackgroundColor.darkGray,
-                    ),
-                    (AppLocalizations.of(context).white, BackgroundColor.white),
-                  ],
-                  settings.backgroundColor,
-                  (value) => settings.setBackgroundColor(value),
-                ),
-                _buildDropdownSetting(
-                  context,
                   AppLocalizations.of(context).orientationLabel,
                   [
                     (

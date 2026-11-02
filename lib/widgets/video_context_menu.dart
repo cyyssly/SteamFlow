@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:steam_flow/l10n/app_localizations.dart';
@@ -80,10 +82,11 @@ class _VideoContextMenuState extends State<VideoContextMenu>
   /// 默认的 kMinInteractiveDimension（48）在移动端显得行间距偏大，收窄到 40。
   static const double _rowHeight = 40.0;
 
-  /// 级联入口行在 Column 里的相对顺序：
-  /// 3 个操作项（放大/缩小/旋转）+ 播放速度 + 声道 + 字幕。
+  /// 级联入口行在 Column 里的相对顺序。
+  /// 桌面端：放大 / 缩小 / 旋转 / 上下翻转 + 播放速度 + 声道 + 字幕，共 4 行在前；
+  /// 移动端没有放大 / 缩小 / 旋转，只有上下翻转在前，共 1 行。
   /// 此常量只用于计算二级菜单锚点位置。
-  static const int _rowsBeforeCascade = 3;
+  int get _rowsBeforeCascade => (Platform.isAndroid || Platform.isIOS) ? 1 : 4;
 
   late final AnimationController _fadeController;
 
@@ -360,18 +363,27 @@ class _VideoContextMenuState extends State<VideoContextMenu>
 
   Widget _buildRootMenu() {
     final theme = PopupMenuTheme.of(context);
+    final isMobile = Platform.isAndroid || Platform.isIOS;
     final children = <Widget>[
+      // 放大 / 缩小 / 旋转只在桌面端提供：
+      // 移动端缩放靠双指手势，旋转由横竖屏切换按钮负责
+      if (!isMobile) ...[
+        _menuItemRow(
+          label: widget.l10n.zoomIn,
+          onTap: () => widget.onAction('zoomIn'),
+        ),
+        _menuItemRow(
+          label: widget.l10n.zoomOut,
+          onTap: () => widget.onAction('zoomOut'),
+        ),
+        _menuItemRow(
+          label: widget.l10n.rotate,
+          onTap: () => widget.onAction('rotate'),
+        ),
+      ],
       _menuItemRow(
-        label: widget.l10n.zoomIn,
-        onTap: () => widget.onAction('zoomIn'),
-      ),
-      _menuItemRow(
-        label: widget.l10n.zoomOut,
-        onTap: () => widget.onAction('zoomOut'),
-      ),
-      _menuItemRow(
-        label: widget.l10n.rotate,
-        onTap: () => widget.onAction('rotate'),
+        label: widget.l10n.flipVertical,
+        onTap: () => widget.onAction('flip'),
       ),
       _buildCascadeEntry(
         label: widget.l10n.playbackSpeed,

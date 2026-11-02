@@ -147,7 +147,10 @@ class _ExcludedVideosScreenState extends State<ExcludedVideosScreen>
       }
 
       if (pendingPaths.isNotEmpty) {
-        final ratios = await VideoScanService.readAspectRatios(pendingPaths);
+        final ratios = await VideoScanService.readAspectRatios(
+          pendingPaths,
+          maxSize: MasonryVideoGrid.thumbnailMaxSizeFor(context),
+        );
         if (!mounted) return;
         setState(() {
           for (var k = 0; k < pendingPaths.length; k++) {
@@ -175,7 +178,10 @@ class _ExcludedVideosScreenState extends State<ExcludedVideosScreen>
   /// 预生成一批视频的缩略图，填充缩略图缓存
   Future<void> _precacheBatch(List<VideoItem> batch) async {
     if (!mounted) return;
-    await MasonryVideoGrid.precacheAll(batch.map((e) => e.path).toList());
+    await MasonryVideoGrid.precacheAll(
+      context,
+      batch.map((e) => e.path).toList(),
+    );
   }
 
   // ── 单图操作 ──

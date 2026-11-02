@@ -39,8 +39,8 @@ class VideoThumbnail {
 //
 // 该文件不依赖 Flutter，因此可以用 `dart run` 单独验证。
 
-/// 请求的缩略图最大边长。
-const int _maxSize = 512;
+/// 调用方未指定尺寸时请求的缩略图最大边长。
+const int kDefaultThumbnailMaxSize = 512;
 
 /// `SIIGBF_THUMBNAILONLY`：只要真实缩略图，没有时直接失败（避免拿到通用图标）。
 const int _siigbfThumbnailOnly = 0x08;
@@ -100,21 +100,29 @@ const int _pkeyVideoFrameHeightPid = 4;
 const int _vtUi4 = 19;
 
 /// 生成单个视频的缩略图；失败（无缩略图/文件不存在）返回 null。
-VideoThumbnail? windowsVideoThumbnailSync(String path) {
+///
+/// [maxSize] 是请求的外接正方形边长，由调用方按卡片实际物理像素决定。
+VideoThumbnail? windowsVideoThumbnailSync(
+  String path, {
+  int maxSize = kDefaultThumbnailMaxSize,
+}) {
   if (!File(path).existsSync()) return null;
   try {
-    return _extract(path);
+    return _extract(path, maxSize);
   } catch (_) {
     return null;
   }
 }
 
 /// 批量生成缩略图，供后台 isolate 一次调用。
-List<VideoThumbnail?> windowsVideoThumbnailsSync(List<String> paths) => [
-  for (final path in paths) windowsVideoThumbnailSync(path),
+List<VideoThumbnail?> windowsVideoThumbnailsSync(
+  List<String> paths, {
+  int maxSize = kDefaultThumbnailMaxSize,
+}) => [
+  for (final path in paths) windowsVideoThumbnailSync(path, maxSize: maxSize),
 ];
 
-VideoThumbnail? _extract(String path) {
+VideoThumbnail? _extract(String path, int maxSize) {
   final shell32 = DynamicLibrary.open('shell32.dll');
   final ole32 = DynamicLibrary.open('ole32.dll');
   final gdi32 = DynamicLibrary.open('gdi32.dll');
@@ -177,8 +185,8 @@ VideoThumbnail? _extract(String path) {
     item = itemPtr.value;
     if (item == nullptr) return null;
 
-    sizePtr.ref.cx = _maxSize;
-    sizePtr.ref.cy = _maxSize;
+    sizePtr.ref.cx = maxSize;
+    sizePtr.ref.cy = maxSize;
     final getImage = _comSlot<_GetImageNative>(
       item,
       3,

@@ -119,12 +119,32 @@ class MasonryVideoGrid extends StatelessWidget {
     return frameWidth > 0 ? math.min(decodeWidth, frameWidth) : decodeWidth;
   }
 
+  /// 缩略图请求的最大边长（物理像素，按档位取）。
+  ///
+  /// 卡片逻辑宽度 × devicePixelRatio 就是实际需要的像素数；竖屏视频同样
+  /// 按卡片宽度缩放，所以卡片宽度就够当长边用。档位始终不小于需求量，
+  /// 因此图片只会被缩小、不会被放大（不加系数的原因）。
+  /// 窗口尺寸 / 系统缩放变化时由 [_MasonryVideoCardState.didChangeDependencies]
+  /// 重新取档。
+  static int thumbnailMaxSizeFor(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final tileWidth = tileWidthFor(media.size.width);
+    final needed = (tileWidth * media.devicePixelRatio).round();
+    return VideoThumbnailService.bucketFor(needed);
+  }
+
   /// 提前生成一批视频的缩略图，填充 [VideoThumbnailService] 的内存缓存。
   ///
   /// 滚动到这些卡片时缩略图已在缓存里，卡片可以直接渲染，
   /// 不会先显示占位图再跳变。
-  static Future<void> precacheAll(List<String> paths) async {
-    await VideoThumbnailService.readAspectRatios(paths);
+  static Future<void> precacheAll(
+    BuildContext context,
+    List<String> paths,
+  ) async {
+    await VideoThumbnailService.readAspectRatios(
+      paths,
+      maxSize: thumbnailMaxSizeFor(context),
+    );
   }
 
   final List<VideoItem> items;
@@ -366,10 +386,19 @@ class _MasonryVideoCardState extends State<_MasonryVideoCard> {
   /// 否则会残留上一个视频的缩略图。
   int _requestId = 0;
 
+  /// 当前布局下这张缩略图需要的长边（物理像素档位）。
+  /// 0 表示还没按当前上下文算过。
+  int _thumbMaxSize = 0;
+
   @override
-  void initState() {
-    super.initState();
-    _adoptThumbnail();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final size = MasonryVideoGrid.thumbnailMaxSizeFor(context);
+    if (size != _thumbMaxSize) {
+      // 首次进入或窗口尺寸/缩放变化：按新档位重新取图
+      _thumbMaxSize = size;
+      _adoptThumbnail();
+    }
   }
 
   @override
@@ -389,7 +418,10 @@ class _MasonryVideoCardState extends State<_MasonryVideoCard> {
       _loading = false;
       return;
     }
-    final cached = VideoThumbnailService.cached(widget.item.path);
+    final cached = VideoThumbnailService.cached(
+      widget.item.path,
+      maxSize: _thumbMaxSize,
+    );
     _thumbnail = cached;
     _loading = cached == null;
     if (cached == null) {
@@ -402,6 +434,7 @@ class _MasonryVideoCardState extends State<_MasonryVideoCard> {
     final requestId = ++_requestId;
     final thumbnail = await VideoThumbnailService.thumbnailFor(
       widget.item.path,
+      maxSize: _thumbMaxSize,
     );
     if (!mounted || requestId != _requestId) return;
     setState(() {

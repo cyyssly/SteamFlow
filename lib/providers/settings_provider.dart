@@ -22,8 +22,6 @@ enum PlayOrder {
 
 enum VideoFitMode { contain, cover, original }
 
-enum BackgroundColor { black, darkGray, white }
-
 enum DeleteAction {
   exclude, // 排除播放
   delete, // 实际删除
@@ -94,7 +92,6 @@ class SettingsProvider extends ChangeNotifier {
 
   // 视频显示设置
   VideoFitMode _videoFitMode = VideoFitMode.contain;
-  BackgroundColor _backgroundColor = BackgroundColor.black;
   VideoOrientation _videoOrientation = VideoOrientation.followSystem;
 
   // 窗口/全屏控制
@@ -184,7 +181,6 @@ class SettingsProvider extends ChangeNotifier {
   bool get loopPlay => _loopPlay;
   bool get autoPlay => _autoPlay;
   VideoFitMode get videoFitMode => _videoFitMode;
-  BackgroundColor get backgroundColor => _backgroundColor;
   VideoOrientation get videoOrientation => _videoOrientation;
   bool get startFullscreen => _startFullscreen;
   bool get hideToolbar => _hideToolbar;
@@ -253,12 +249,6 @@ class SettingsProvider extends ChangeNotifier {
 
   void setVideoFitMode(VideoFitMode value) {
     _videoFitMode = value;
-    notifyListeners();
-    _saveSettings();
-  }
-
-  void setBackgroundColor(BackgroundColor value) {
-    _backgroundColor = value;
     notifyListeners();
     _saveSettings();
   }
@@ -528,18 +518,6 @@ class SettingsProvider extends ChangeNotifier {
     }
   }
 
-  // 获取背景颜色
-  Color get background {
-    switch (_backgroundColor) {
-      case BackgroundColor.black:
-        return Colors.black;
-      case BackgroundColor.darkGray:
-        return const Color(0xFF333333);
-      case BackgroundColor.white:
-        return Colors.white;
-    }
-  }
-
   // 加载设置
   Future<void> loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
@@ -553,8 +531,6 @@ class SettingsProvider extends ChangeNotifier {
     _loopPlay = prefs.getBool('loopPlay') ?? false;
     _autoPlay = prefs.getBool('autoPlay') ?? true;
     _videoFitMode = VideoFitMode.values[prefs.getInt('videoFitMode') ?? 0];
-    _backgroundColor =
-        BackgroundColor.values[prefs.getInt('backgroundColor') ?? 0];
     _startFullscreen = prefs.getBool('startFullscreen') ?? true;
     _hideToolbar = prefs.getBool('hideToolbar') ?? true;
     _controlsHideDelay = prefs.getInt('controlsHideDelay') ?? 3;
@@ -669,7 +645,6 @@ class SettingsProvider extends ChangeNotifier {
     await prefs.setBool('loopPlay', _loopPlay);
     await prefs.setBool('autoPlay', _autoPlay);
     await prefs.setInt('videoFitMode', _videoFitMode.index);
-    await prefs.setInt('backgroundColor', _backgroundColor.index);
     await prefs.setBool('startFullscreen', _startFullscreen);
     await prefs.setBool('hideToolbar', _hideToolbar);
     await prefs.setInt('controlsHideDelay', _controlsHideDelay);

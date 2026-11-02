@@ -49,7 +49,7 @@ class PlayerScreen extends StatefulWidget {
 }
 
 class _PlayerScreenState extends State<PlayerScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   // ==================== 播放内核 ====================
   late final Player _player;
   late final VideoController _videoController;
@@ -288,6 +288,11 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// 退出播放页时会自动清除并还原设置里的方向。
   VideoOrientation? _playerTempOrientation;
 
+  /// 是否处于上下翻转（180°）状态。
+  ///
+  /// 移动端翻转整个播放界面（界面与视频一起翻），桌面端只翻视频画面。
+  bool _flipped = false;
+
   /// 当前视频的原始像素尺寸，用于计算平移边界与自动旋转。
   /// 由播放器事件流（width/height）异步填充。
   Size? get _intrinsicSize {
@@ -324,6 +329,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
     _volume = _player.state.volume;
     _listenPlayer();
+    // 监听窗口尺寸/方向变化：屏幕转向后要重算视频自动旋转
+    WidgetsBinding.instance.addObserver(this);
 
     // 兜底：上一个播放器若因页面未销毁而残留，先销毁它，避免旧视频与
     // 新视频同时出声（表现为「点开其他视频也打断不了原来的播放」）。
@@ -359,6 +366,12 @@ class _PlayerScreenState extends State<PlayerScreen>
           if (!mounted) return;
           _enterFullscreen();
         });
+      }
+
+      // 手机端进入沉浸式全屏：连同底部的系统手势指示条一起隐藏。
+      // 否则横屏播放时，画面下方中间会一直露着一根手指手势小横线。
+      if (Platform.isAndroid) {
+        SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
       }
 
       // 打开当前视频（播放状态由 SlideProvider 的播放意图决定）
@@ -519,6 +532,24 @@ class _PlayerScreenState extends State<PlayerScreen>
     _nextVideo(trigger: _TransitionTrigger.auto);
   }
 
+  /// 屏幕方向 / 窗口尺寸变化：重算视频自动旋转与平移边界。
+  ///
+  /// 强制横竖屏或系统旋转后，MediaQuery 要到下一帧才更新，所以延后一帧再算，
+  /// 避免拿到旧的屏幕尺寸（「跟随视频」依赖它）。
+  @override
+  void didChangeMetrics() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final settings = Provider.of<SettingsProvider>(context, listen: false);
+      final slideProvider = Provider.of<SlideProvider>(context, listen: false);
+      setState(() {
+        _autoRotation = _computeAutoRotation(slideProvider, settings);
+        _position = _clampCurrent(settings);
+      });
+      _publishTransform();
+    });
+  }
+
   /// 播放器解码出视频尺寸后，重算自动旋转与平移边界。
   void _onVideoSizeChanged(int? width, int? height) {
     if (!mounted) return;
@@ -535,6 +566,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       _position = _clampCurrent(settings);
     });
     _publishTransform();
+    // 尺寸到位后才知道「跟随视频」该锁横屏还是竖屏（开播时通常还没拿到）
+    if (Platform.isAndroid || Platform.isIOS) {
+      _applyScreenOrientation(settings);
+    }
   }
 
   /// 播放列表变化时的处理：换片则重新打开，否则只同步播放/暂停。
@@ -618,13 +653,6 @@ class _PlayerScreenState extends State<PlayerScreen>
 
     _transitionController.forward(from: 0);
 
-    // 恢复该视频上次手动锁定的方向；没手动切过则跟随设置
-    _playerTempOrientation = switch (TrackPrefService.instance
-        .orientationFor(video.key)) {
-      'landscape' => VideoOrientation.landscape,
-      'portrait' => VideoOrientation.portrait,
-      _ => null,
-    };
     _applyScreenOrientation(settings);
   }
 
@@ -678,6 +706,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
     // 移除全局键盘监听器
     HardwareKeyboard.instance.removeHandler(_hardwareKeyHandler);
+    WidgetsBinding.instance.removeObserver(this);
 
     // 释放屏幕常亮，恢复系统正常熄屏行为
     WakelockPlus.disable();
@@ -1309,11 +1338,19 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// 手动旋转 + 方向自动旋转后的总旋转角（弧度）。
   double get _totalRotation => _rotation + _autoRotation;
 
+  /// 上下翻转叠加到视频上的圈数。
+  ///
+  /// 移动端翻转的是整个播放界面（连视频一起），这里不再叠加；
+  /// 桌面端界面不动，只能把 180° 加到视频上。
+  int get _flipTurns =>
+      _flipped && !(Platform.isAndroid || Platform.isIOS) ? 2 : 0;
+
   /// 旋转圈数（0~3），供 [RotatedBox] 在布局阶段旋转使用。
   ///
   /// 手动旋转会不断累加 `math.pi / 2`，浮点误差随次数增加；
   /// 统一归一化成整数圈数交给 [RotatedBox]，从根上避免累积误差。
-  int get _quarterTurns => normalizeQuarterTurns(_totalRotation);
+  int get _quarterTurns =>
+      normalizeQuarterTurns(_totalRotation + _flipTurns * (math.pi / 2));
 
   /// 视频在屏幕上显示的实际尺寸（未缩放）。
   ///
@@ -1609,6 +1646,19 @@ class _PlayerScreenState extends State<PlayerScreen>
     _publishTransform();
   }
 
+  /// 上下翻转（180°）：移动端连播放界面一起翻，桌面端只翻视频画面。
+  void _flipVideo() {
+    setState(() => _flipped = !_flipped);
+  }
+
+  /// 移动端上下翻转时，把整个播放界面包一层 180° 旋转，界面与视频一起翻；
+  /// 桌面端界面保持不动（翻转只加在视频上，见 [_flipTurns]）。
+  Widget _withScreenFlip(Widget child) {
+    if (!_flipped) return child;
+    if (!Platform.isAndroid && !Platform.isIOS) return child;
+    return RotatedBox(quarterTurns: 2, child: child);
+  }
+
   /// 时长就绪后应用挂起的接续播放位置。
   void _maybeApplyResumeSeek() {
     final target = _pendingResumeSeek;
@@ -1875,6 +1925,9 @@ class _PlayerScreenState extends State<PlayerScreen>
             case 'rotate':
               _rotateVideo();
               break;
+            case 'flip':
+              _flipVideo();
+              break;
           }
         },
         onRateSelected: (rate) {
@@ -1958,6 +2011,9 @@ class _PlayerScreenState extends State<PlayerScreen>
             case 'rotate':
               _rotateVideo();
               break;
+            case 'flip':
+              _flipVideo();
+              break;
           }
         },
         onRateSelected: (rate) {
@@ -2037,15 +2093,29 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// 根据视频方向设置计算自动旋转角度。
   ///
   /// 依赖 [_intrinsicSize]（由播放器事件流异步填充），不做同步解码。
-  /// 若 [_playerTempOrientation] 非 null，则优先使用它。
+  ///
+  /// 平台差异：
+  /// - 移动端：屏幕方向由系统旋转整个窗口实现，播放界面和视频一起转；
+  /// - 桌面端：窗口不能转，需要旋转时只转视频画面，界面保持不动。
+  ///
+  /// 只看设置里的方向偏好，**不**参考 [_playerTempOrientation]：
+  /// 那个临时覆盖只负责锁设备方向，若让它参与自动旋转，切回竖屏时
+  /// 视频会被额外旋转 90°（画面仍是横着躺的），看起来像"转不回来"。
   double _computeAutoRotation(
     SlideProvider slideProvider,
     SettingsProvider settings,
   ) {
     if (slideProvider.videos.isEmpty) return 0.0;
 
-    final effective = _playerTempOrientation ?? settings.videoOrientation;
-    switch (effective) {
+    // 移动端：屏幕方向一律交给系统旋转整个窗口实现，播放界面和视频一起转，
+    // 画面本身不再额外旋转。「跟随视频」这一档由 [_applyScreenOrientation]
+    // 把设备方向锁到视频的朝向，所以这里也不需要转画面。
+    if (Platform.isAndroid || Platform.isIOS) {
+      return 0.0;
+    }
+
+    // 桌面端：窗口无法旋转，需要旋转时只把视频画面转过来，播放界面保持不动。
+    switch (settings.videoOrientation) {
       case VideoOrientation.landscape:
         // 强制横屏：如果视频是竖屏的，旋转90°
         return _isPortraitVideo() ? math.pi / 2 : 0.0;
@@ -2110,8 +2180,30 @@ class _PlayerScreenState extends State<PlayerScreen>
         ]);
         break;
       case VideoOrientation.followSystem:
-      case VideoOrientation.followVideo:
         SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+        break;
+      case VideoOrientation.followVideo:
+        // 移动端「跟随视频」：把设备方向锁到视频的朝向，
+        // 让播放界面和视频一起转成横屏 / 竖屏（桌面端窗口不转，画面由
+        // [_computeAutoRotation] 旋转）。
+        if (Platform.isAndroid || Platform.isIOS) {
+          if (_isLandscapeVideo()) {
+            SystemChrome.setPreferredOrientations([
+              DeviceOrientation.landscapeLeft,
+              DeviceOrientation.landscapeRight,
+            ]);
+          } else if (_isPortraitVideo()) {
+            SystemChrome.setPreferredOrientations([
+              DeviceOrientation.portraitUp,
+              DeviceOrientation.portraitDown,
+            ]);
+          } else {
+            // 尺寸未就绪或近似正方形：先不锁，等尺寸到位再应用
+            SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+          }
+        } else {
+          SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+        }
         break;
     }
   }
@@ -2143,18 +2235,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
 
     _playerTempOrientation = next;
-    // 记住该视频的方向，下次播放自动恢复
-    final key = _openPath;
-    if (key != null) {
-      unawaited(
-        TrackPrefService.instance.save(
-          key,
-          orientation: next == VideoOrientation.landscape
-              ? 'landscape'
-              : 'portrait',
-        ),
-      );
-    }
     final settings = Provider.of<SettingsProvider>(context, listen: false);
     final slideProvider = Provider.of<SlideProvider>(context, listen: false);
     _applyScreenOrientation(settings);
@@ -2220,7 +2300,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
           if (slideProvider.videos.isEmpty) {
             return Scaffold(
-              backgroundColor: settings.background,
+              backgroundColor: Colors.black,
               body: Center(child: Text(AppLocalizations.of(context).noVideos)),
             );
           }
@@ -2237,8 +2317,9 @@ class _PlayerScreenState extends State<PlayerScreen>
               : (false, false);
 
           return Scaffold(
-            backgroundColor: settings.background,
-            body: Focus(
+            backgroundColor: Colors.black,
+            body: _withScreenFlip(
+              Focus(
               autofocus: true,
               child: Listener(
                 onPointerSignal: _handleScroll,
@@ -2315,7 +2396,8 @@ class _PlayerScreenState extends State<PlayerScreen>
                                   child: Video(
                                     controller: _videoController,
                                     fit: settings.boxFit,
-                                    fill: settings.background,
+                                    // 背景底色固定为黑色（设置页已移除该项）
+                                    fill: Colors.black,
                                     // 播放控制由本页自己的工具栏负责，
                                     // 关闭 media_kit 自带控件避免重复。
                                     controls: null,
@@ -2381,6 +2463,8 @@ class _PlayerScreenState extends State<PlayerScreen>
                               right: 0,
                               child: AppBar(
                                 key: _topControlsKey,
+                                // 横屏紧凑模式下压掉默认 56dp 的工具栏高度
+                                toolbarHeight: _compactToolbar ? 40 : null,
                                 backgroundColor: Colors.black.withValues(
                                   alpha: 0.5,
                                 ),
@@ -2477,15 +2561,17 @@ class _PlayerScreenState extends State<PlayerScreen>
                                         onPressed: _showDeleteConfirmation,
                                       ),
                                     ),
-                                  Tooltip(
-                                    message: AppLocalizations.of(
-                                      context,
-                                    ).rotate,
-                                    child: IconButton(
-                                      icon: const Icon(Icons.rotate_right),
-                                      onPressed: _rotateVideo,
+                                  // 手动旋转仅在桌面端显示：移动端已有横竖屏切换按钮
+                                  if (!Platform.isAndroid && !Platform.isIOS)
+                                    Tooltip(
+                                      message: AppLocalizations.of(
+                                        context,
+                                      ).rotate,
+                                      child: IconButton(
+                                        icon: const Icon(Icons.rotate_right),
+                                        onPressed: _rotateVideo,
+                                      ),
                                     ),
-                                  ),
                                   Tooltip(
                                     message: AppLocalizations.of(
                                       context,
@@ -2526,7 +2612,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                                 padding: _compactToolbar
                                     ? EdgeInsets.fromLTRB(
                                         16,
-                                        4,
+                                        2,
                                         16,
                                         4 +
                                             MediaQuery.viewPaddingOf(
@@ -2539,7 +2625,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                                     if (settings.showVideoInfo && _showInfo)
                                       Padding(
                                         padding: EdgeInsets.only(
-                                          bottom: _compactToolbar ? 4 : 12,
+                                          bottom: _compactToolbar ? 2 : 12,
                                         ),
                                         child: SingleChildScrollView(
                                           scrollDirection: Axis.horizontal,
@@ -2602,13 +2688,19 @@ class _PlayerScreenState extends State<PlayerScreen>
                                           child: SizedBox(
                                             // 紧凑模式下把进度条压扁，
                                             // 消掉 Slider 默认 48dp 行高带来的上下留白
-                                            height: _compactToolbar ? 20 : null,
+                                            height: _compactToolbar ? 10 : null,
                                             child: SliderTheme(
                                               data: _compactToolbar
                                                   ? SliderTheme.of(
                                                       context,
                                                     ).copyWith(
                                                       trackHeight: 3,
+                                                      // 只保留左右内缩，纵向内边距归零，
+                                                      // 进度条下方不再有额外留白
+                                                      padding:
+                                                          const EdgeInsets.symmetric(
+                                                            horizontal: 18,
+                                                          ),
                                                       thumbShape:
                                                           const RoundSliderThumbShape(
                                                             enabledThumbRadius:
@@ -2696,20 +2788,18 @@ class _PlayerScreenState extends State<PlayerScreen>
                                                   ).toggleScreenLandscape,
                                             child: IconButton(
                                               padding: EdgeInsets.zero,
-                                              // 紧凑模式下跟着进度条一起压扁，
-                                              // 否则它会把这行撑回 32dp 高
+                                              // 紧凑模式下按钮盒高与图标同高，
+                                              // 行内垂直居中后正好压在进度条那条线上
                                               constraints: _compactToolbar
                                                   ? const BoxConstraints(
-                                                      minWidth: 26,
-                                                      minHeight: 20,
+                                                      minWidth: 30,
+                                                      minHeight: 22,
                                                     )
                                                   : const BoxConstraints(
                                                       minWidth: 32,
                                                       minHeight: 32,
                                                     ),
-                                              iconSize: _compactToolbar
-                                                  ? 18
-                                                  : 22,
+                                              iconSize: 22,
                                               // 图标固定用旋转图标，不随当前方向变化
                                               icon: const Icon(
                                                 Icons.screen_rotation,
@@ -3020,7 +3110,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                   },
                 ),
               ),
-            ),
+            )),
           );
         },
       ),

@@ -85,8 +85,13 @@ class VideoScanService {
   /// 视频的尺寸无法从文件头直接解析出来，必须解码出一帧；
   /// 实现放在 [VideoThumbnailService] 里：一次生成缩略图，
   /// 既拿到宽高比，也把缩略图填进缓存供瀑布流卡片直接显示。
-  static Future<List<double?>> readAspectRatios(List<String> paths) =>
-      VideoThumbnailService.readAspectRatios(paths);
+  static Future<List<double?>> readAspectRatios(
+    List<String> paths, {
+    int? maxSize,
+  }) => VideoThumbnailService.readAspectRatios(
+    paths,
+    maxSize: maxSize ?? VideoThumbnailService.defaultMaxSize,
+  );
 
   /// 批量读取视频的宽高比与真实分辨率（同时把缩略图填入缓存）。
   static Future<List<VideoFrameInfo>> readSizes(List<String> paths) =>

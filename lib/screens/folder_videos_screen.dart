@@ -361,7 +361,10 @@ class _FolderVideosScreenState extends State<FolderVideosScreen>
   /// 预生成一批视频的缩略图，填充缩略图缓存
   Future<void> _precacheBatch(List<VideoItem> batch) async {
     if (!mounted || batch.isEmpty) return;
-    await MasonryVideoGrid.precacheAll(batch.map((e) => e.path).toList());
+    await MasonryVideoGrid.precacheAll(
+      context,
+      batch.map((e) => e.path).toList(),
+    );
   }
 
   // ── 排序 ──
