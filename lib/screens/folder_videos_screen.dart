@@ -35,7 +35,20 @@ enum _SortAction {
 class FolderVideosScreen extends StatefulWidget {
   final String folderPath;
 
-  const FolderVideosScreen({super.key, required this.folderPath});
+  /// 同名文件夹的其余路径。
+  ///
+  /// 移动端会把所有同名的本地文件夹归并为一个条目管理，浏览时需要把
+  /// 这些路径的视频合并在一起展示；桌面端恒为空。
+  final List<String> extraFolderPaths;
+
+  const FolderVideosScreen({
+    super.key,
+    required this.folderPath,
+    this.extraFolderPaths = const [],
+  });
+
+  /// 本次浏览覆盖的全部文件夹路径（首个为主路径，用于排序/布局记忆）
+  List<String> get allFolderPaths => [folderPath, ...extraFolderPaths];
 
   @override
   State<FolderVideosScreen> createState() => _FolderVideosScreenState();
@@ -238,10 +251,16 @@ class _FolderVideosScreenState extends State<FolderVideosScreen>
 
   Future<void> _loadVideos() async {
     final settings = Provider.of<SettingsProvider>(context, listen: false);
-    final items = await VideoScanService.scanFolder(
-      widget.folderPath,
-      settings,
-    );
+    // 移动端同名文件夹会归并展示：逐个扫描后按视频键去重，
+    // 避免同一视频因路径重复出现在列表中
+    final unique = <String, VideoItem>{};
+    for (final path in widget.allFolderPaths) {
+      final items = await VideoScanService.scanFolder(path, settings);
+      for (final item in items) {
+        unique.putIfAbsent(item.key, () => item);
+      }
+    }
+    final items = unique.values.toList();
     if (!mounted) return;
     setState(() {
       _allItems = items;

@@ -78,7 +78,7 @@ class _RemoteBrowserScreenState extends State<RemoteBrowserScreen> {
     final lan = Provider.of<LanProvider>(context, listen: false);
     final key = '${widget.device.id}/${folder.id}';
     if (selected) {
-      settings.removeSharedFolder(key);
+      settings.removeSharedFolderFromActiveLibrary(key);
       return;
     }
     final ref = SharedFolderRef(
@@ -153,12 +153,11 @@ class _RemoteBrowserScreenState extends State<RemoteBrowserScreen> {
     SettingsProvider settings,
     List<RemoteFolder> folders,
   ) {
-    final selectedIds = widget.selectMode
-        ? settings.sharedFolders
-              .where((ref) => ref.deviceId == widget.device.id)
-              .map((ref) => ref.folderId)
-              .toSet()
-        : const <String>{};
+    // 勾选状态按当前媒体库的绑定计算：同一共享源可在多个库分别绑定
+    final selectedIds = settings.activeLibrarySharedFolders
+        .where((ref) => ref.deviceId == widget.device.id)
+        .map((ref) => ref.folderId)
+        .toSet();
 
     final list = ListView.separated(
       itemCount: folders.length,

@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:steam_flow/providers/settings_provider.dart';
+import 'package:steam_flow/providers/slide_provider.dart';
 import 'package:steam_flow/services/windows_context_menu_service.dart';
 import 'package:steam_flow/l10n/app_localizations.dart';
 
@@ -254,6 +256,64 @@ class SettingsScreen extends StatelessWidget {
                   settings.browseLayout,
                   (value) => settings.setBrowseLayout(value),
                 ),
+                _buildSwitchSetting(
+                  context,
+                  AppLocalizations.of(context).showHiddenLibraries,
+                  AppLocalizations.of(context).showHiddenLibrariesDesc,
+                  settings.showHiddenLibraries,
+                  (value) {
+                    // 关闭开关时若当前库是隐藏库，设置层会自动切到可见库，
+                    // 这里同步播放列表，避免仍停留在隐藏库的文件夹上
+                    if (settings.setShowHiddenLibraries(value)) {
+                      final slide = Provider.of<SlideProvider>(
+                        context,
+                        listen: false,
+                      );
+                      slide.setFolderPaths(settings.lastFolderPaths);
+                      slide.setVideos(const []);
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+      // 字幕样式（字体与字号通过 libmpv 属性实时生效）
+      _SettingsGroup(
+        weight: 3,
+        // 桌面端固定在左栏
+        preferredColumn: 0,
+        widgets: [
+          _buildSectionTitle(AppLocalizations.of(context).subtitleStyle),
+          Consumer<SettingsProvider>(
+            builder: (context, settings, child) => Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildEditableTextSetting(
+                  context,
+                  AppLocalizations.of(context).subtitleFont,
+                  AppLocalizations.of(context).subtitleFontDesc,
+                  settings.subtitleFontFamily,
+                  () => unawaited(_editSubtitleFont(context, settings)),
+                ),
+                _buildSliderSetting(
+                  context,
+                  AppLocalizations.of(context).subtitleFontSize,
+                  '${settings.subtitleFontSize}',
+                  settings.subtitleFontSize.toDouble(),
+                  SettingsProvider.subtitleFontSizeMin.toDouble(),
+                  SettingsProvider.subtitleFontSizeMax.toDouble(),
+                  2,
+                  (value) => settings.setSubtitleFontSize(value.toInt()),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: Text(
+                    AppLocalizations.of(context).subtitleFontSizeDesc,
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                ),
               ],
             ),
           ),
@@ -397,6 +457,26 @@ class SettingsScreen extends StatelessWidget {
                         ? AppLocalizations.of(context).mobileTapPlayDesc
                         : AppLocalizations.of(context).mobileTapSelectDesc,
                   ),
+                _buildDropdownSetting(
+                  context,
+                  AppLocalizations.of(context).arrowKeyBehavior,
+                  [
+                    (
+                      AppLocalizations.of(context).arrowKeySeek,
+                      ArrowKeyAction.seek,
+                    ),
+                    (
+                      AppLocalizations.of(context).wheelSwitchVideo,
+                      ArrowKeyAction.switchVideo,
+                    ),
+                  ],
+                  settings.arrowKeyAction,
+                  (value) => settings.setArrowKeyAction(value),
+                  // 说明 Ctrl + 方向键执行的是与当前设置相反的行为
+                  subtitle: settings.arrowKeyAction == ArrowKeyAction.seek
+                      ? AppLocalizations.of(context).ctrlArrowSwitchHint
+                      : AppLocalizations.of(context).ctrlArrowSeekHint,
+                ),
                 _buildDropdownSetting(
                   context,
                   AppLocalizations.of(context).deleteBehavior,
@@ -603,6 +683,101 @@ class SettingsScreen extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// 可点击编辑的设置项：右侧显示当前文本，点击后弹出输入框。
+  Widget _buildEditableTextSetting(
+    BuildContext context,
+    String title,
+    String subtitle,
+    String value,
+    VoidCallback onTap,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: Theme.of(context).textTheme.bodyLarge),
+                if (subtitle.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      subtitle,
+                      style: const TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 180),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0f3460),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(
+                      value,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.white, fontSize: 14),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  const Icon(Icons.edit, color: Colors.white70, size: 16),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 编辑字幕字体名称；留空时回退到系统默认字体。
+  Future<void> _editSubtitleFont(
+    BuildContext context,
+    SettingsProvider settings,
+  ) async {
+    final loc = AppLocalizations.of(context);
+    var text = settings.subtitleFontFamily;
+    final result = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(loc.subtitleFont),
+        content: TextFormField(
+          initialValue: settings.subtitleFontFamily,
+          autofocus: true,
+          decoration: InputDecoration(hintText: loc.subtitleFontHint),
+          onChanged: (value) => text = value,
+          onFieldSubmitted: (value) =>
+              Navigator.pop(dialogContext, value),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: Text(loc.cancel),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, text),
+            child: Text(loc.confirm),
+          ),
+        ],
+      ),
+    );
+    if (result != null) settings.setSubtitleFontFamily(result);
   }
 
   Widget _buildSwitchSetting(

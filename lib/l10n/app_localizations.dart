@@ -71,6 +71,48 @@ class AppLocalizations {
   String get appTitle => 'SteamFlow';
   String get homeTitle => 'SteamFlow';
 
+  // 多媒体库
+  String get mediaLibraries => _t('媒体库', 'Libraries', '媒體庫');
+  String get activeLibraryHint =>
+      _t('点击切换或管理媒体库', 'Tap to switch or manage libraries', '點擊切換或管理媒體庫');
+  String get newLibrary => _t('新建库', 'New Library', '新建庫');
+  String get renameLibrary => _t('重命名', 'Rename', '重新命名');
+  String get deleteLibrary => _t('删除库', 'Delete Library', '刪除庫');
+  String get libraryNameHint => _t(
+    '例如：电影、剧集、课程',
+    'e.g. Movies, Series, Courses',
+    '例如：電影、劇集、課程',
+  );
+  String libraryItemCount(int local, int shared) => _t(
+    '$local 个文件夹 · $shared 个共享',
+    '$local folders · $shared shared',
+    '$local 個資料夾 · $shared 個共享',
+  );
+  String get confirmDeleteLibrary => _t(
+    '删除库不会删除文件和播放进度，确定删除？',
+    'Deleting a library keeps files and playback progress. Delete it?',
+    '刪除庫不會刪除檔案和播放進度，確定刪除？',
+  );
+  String get noLibrariesHint => _t(
+    '还没有媒体库，点击下方按钮新建一个',
+    'No libraries yet. Create one below.',
+    '還沒有媒體庫，點擊下方按鈕新建一個',
+  );
+  String get hideLibrary => _t('隐藏', 'Hide', '隱藏');
+  String get unhideLibrary => _t('取消隐藏', 'Unhide', '取消隱藏');
+  String get showHiddenLibraries =>
+      _t('显示隐藏媒体库', 'Show Hidden Libraries', '顯示隱藏媒體庫');
+  String get showHiddenLibrariesDesc => _t(
+    '开启后，已隐藏的媒体库会以半透明样式出现在库列表中',
+    'When on, hidden libraries appear in the list with reduced opacity',
+    '開啟後，已隱藏的媒體庫會以半透明樣式出現在庫列表中',
+  );
+  String get hiddenLibrariesCollapsed => _t(
+    '隐藏的媒体库已折叠，可在设置中开启「显示隐藏媒体库」',
+    'Hidden libraries are collapsed. Enable "Show Hidden Libraries" in Settings.',
+    '隱藏的媒體庫已折疊，可在設定中開啟「顯示隱藏媒體庫」',
+  );
+
   // 首页
   String get startPlay => _t('开始播放', 'Start', '開始播放');
   String get selectAlbum => _t('选择相册', 'Albums', '選擇相冊');
@@ -111,8 +153,7 @@ class AppLocalizations {
     'Where an unfinished video starts next time',
     '未播放完畢的視頻下次進入時從何處開始播放',
   );
-  String get resumePlaybackFromStart =>
-      _t('从头播放', 'From Start', '從頭播放');
+  String get resumePlaybackFromStart => _t('从头播放', 'From Start', '從頭播放');
   String get loopPlay => _t('循环播放', 'Loop', '循環播放');
   String get loopPlayDesc =>
       _t('关闭：播完停止；开启：首尾循环', 'Off: stop at end; On: loop', '關閉：播完停止；開啟：首尾循環');
@@ -138,6 +179,23 @@ class AppLocalizations {
   String get portrait => _t('竖屏', 'Portrait', '豎屏');
   String get followSystem => _t('跟随系统', 'System', '跟隨係統');
   String get followVideo => _t('跟随视频', 'Follow Video', '跟隨視頻');
+  String get subtitleStyle => _t('字幕样式', 'Subtitle Style', '字幕樣式');
+  String get subtitleFont => _t('字幕字体', 'Subtitle Font', '字幕字體');
+  String get subtitleFontDesc => _t(
+    '输入系统已安装的字体名称，默认为 sans-serif',
+    'Enter an installed font name. Default: sans-serif',
+    '輸入系統已安裝的字體名稱，預設為 sans-serif',
+  );
+  String get subtitleFontHint =>
+      _t('例如：Microsoft YaHei', 'e.g. Microsoft YaHei', '例如：Microsoft YaHei');
+  String get subtitleFontSize => _t('字幕字号', 'Subtitle Size', '字幕字號');
+  String get subtitleFontSizeDesc => _t(
+    '数值越大字幕越大，播放时也可用菜单临时调整',
+    'Larger value = larger subtitles. Can also be adjusted in the playback menu',
+    '數值越大字幕越大，播放時也可用菜單臨時調整',
+  );
+  String get subtitleLarger => _t('字幕加大', 'Larger Subtitles', '字幕加大');
+  String get subtitleSmaller => _t('字幕减小', 'Smaller Subtitles', '字幕減小');
   String get windowFullscreen => _t('工具栏', 'Toolbar', '工具欄');
   String get startFullscreen => _t('播放时自动全屏', 'Auto Fullscreen', '播放時自動全屏');
   String get hideToolbarLabel => _t('自动隐藏工具栏', 'Hide Toolbar', '自動隱藏工具欄');
@@ -194,6 +252,12 @@ class AppLocalizations {
       _t('Ctrl+滚轮：缩放视频', 'Ctrl + Wheel: Zoom', 'Ctrl+滾輪：縮放視頻');
   String get ctrlWheelSwitchHint =>
       _t('Ctrl+滚轮：切换视频', 'Ctrl + Wheel: Switch Video', 'Ctrl+滾輪：切換視頻');
+  String get arrowKeyBehavior => _t('左右箭头行为', 'Arrow Keys', '左右箭頭行為');
+  String get arrowKeySeek => _t('前进/后退', 'Seek', '前進/後退');
+  String get ctrlArrowSwitchHint =>
+      _t('Ctrl+左右箭头：切换视频', 'Ctrl + ←/→: Switch Video', 'Ctrl+左右箭頭：切換視頻');
+  String get ctrlArrowSeekHint =>
+      _t('Ctrl+左右箭头：前进/后退', 'Ctrl + ←/→: Seek', 'Ctrl+左右箭頭：前進/後退');
   String get mobileTapBehavior => _t('短按行为', 'Tap Action', '短按行為');
   String get mobileTapPlay => _t('播放', 'Play', '播放');
   String get mobileTapSelect => _t('选中', 'Select', '選中');
@@ -261,10 +325,8 @@ class AppLocalizations {
   String get exitPlayback => _t('退出播放', 'Exit Playback', '退出播放');
   String get closeApp => _t('关闭', 'Close', '關閉');
   String get enterFullscreen => _t('全屏', 'Fullscreen', '全屏');
-  String get toggleScreenLandscape =>
-      _t('切到横屏', 'Switch to Landscape', '切到橫屏');
-  String get toggleScreenPortrait =>
-      _t('切到竖屏', 'Switch to Portrait', '切到豎屏');
+  String get toggleScreenLandscape => _t('切到横屏', 'Switch to Landscape', '切到橫屏');
+  String get toggleScreenPortrait => _t('切到竖屏', 'Switch to Portrait', '切到豎屏');
   String get rotate => _t('旋转', 'Rotate', '旋轉');
   String get rotateRight => _t('向右旋转', 'Rotate Right', '向右旋轉');
   String get rotateLeft => _t('向左旋转', 'Rotate Left', '向左旋轉');

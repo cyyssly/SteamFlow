@@ -3,7 +3,9 @@ import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:steam_flow/l10n/app_localizations.dart';
 import 'package:steam_flow/models/lan_models.dart';
+import 'package:steam_flow/models/video_library.dart';
 
 /// 播放顺序
 ///
@@ -25,6 +27,14 @@ enum VideoFitMode { contain, cover, original }
 enum DeleteAction {
   exclude, // 排除播放
   delete, // 实际删除
+}
+
+/// 左右方向键的行为。
+///
+/// 按下标持久化到 SharedPreferences，新增项请追加在末尾。
+enum ArrowKeyAction {
+  seek, // 前进/后退（每次跳进度条的 5%）
+  switchVideo, // 切换视频
 }
 
 /// 手机端瀑布流卡片的短按行为。
@@ -84,6 +94,11 @@ extension BrowseLayoutAspect on BrowseLayout {
 }
 
 class SettingsProvider extends ChangeNotifier {
+  /// 字幕字号可调范围（libmpv 的 sub-font-size 默认值为 55）
+  static const int subtitleFontSizeMin = 20;
+  static const int subtitleFontSizeMax = 120;
+  static const int subtitleFontSizeDefault = 55;
+
   // 播放基础设置
   PlayOrder _playOrder = PlayOrder.newPreferred;
   ResumePlayback _resumePlayback = ResumePlayback.resume;
@@ -93,6 +108,10 @@ class SettingsProvider extends ChangeNotifier {
   // 视频显示设置
   VideoFitMode _videoFitMode = VideoFitMode.contain;
   VideoOrientation _videoOrientation = VideoOrientation.followSystem;
+
+  // 字幕样式（仅作用于文本字幕，通过 libmpv 属性实时生效）
+  String _subtitleFontFamily = 'sans-serif';
+  int _subtitleFontSize = subtitleFontSizeDefault;
 
   // 窗口/全屏控制
   bool _startFullscreen = true;
@@ -114,11 +133,23 @@ class SettingsProvider extends ChangeNotifier {
   String? _lastFolderPath;
   List<String> _lastFolderPaths = [];
 
+  /// 所有视频库（互不关联的文件夹集合）
+  List<VideoLibrary> _libraries = [];
+
+  /// 当前激活的库 id
+  String _activeLibraryId = '';
+
+  /// 库列表是否显示已隐藏的库（开启时半透明展示，关闭时完全隐藏）
+  bool _showHiddenLibraries = false;
+
   // 视频底部信息条是否显示（自动隐藏跟随「工具栏」设置统一控制）
   bool _showVideoInfo = false;
 
   // 快捷键与控制
   bool _wheelSwitchVideo = true;
+
+  /// 左右方向键的默认行为（默认前进/后退）
+  ArrowKeyAction _arrowKeyAction = ArrowKeyAction.seek;
 
   /// 手机端短按卡片的行为（默认直接播放）
   MobileTapAction _mobileTapAction = MobileTapAction.play;
@@ -182,6 +213,8 @@ class SettingsProvider extends ChangeNotifier {
   bool get autoPlay => _autoPlay;
   VideoFitMode get videoFitMode => _videoFitMode;
   VideoOrientation get videoOrientation => _videoOrientation;
+  String get subtitleFontFamily => _subtitleFontFamily;
+  int get subtitleFontSize => _subtitleFontSize;
   bool get startFullscreen => _startFullscreen;
   bool get hideToolbar => _hideToolbar;
   int get controlsHideDelay => _controlsHideDelay;
@@ -191,10 +224,34 @@ class SettingsProvider extends ChangeNotifier {
   BrowseLayout get browseLayout => _browseLayout;
 
   String? get lastFolderPath => _lastFolderPath;
-  List<String> get lastFolderPaths => _lastFolderPaths;
+
+  /// 当前激活库的文件夹列表；无库时回退到 [_lastFolderPaths]（迁移期兼容）。
+  ///
+  /// 现有所有代码都通过它读取「当前管理的文件夹」，因此引入多库后无需改动。
+  List<String> get lastFolderPaths {
+    final lib = activeLibrary;
+    return lib != null ? lib.folderPaths : _lastFolderPaths;
+  }
+
+  /// 全部库（只读视图）
+  List<VideoLibrary> get libraries => List.unmodifiable(_libraries);
+
+  String get activeLibraryId => _activeLibraryId;
+
+  /// 库列表是否显示已隐藏的库
+  bool get showHiddenLibraries => _showHiddenLibraries;
+
+  /// 当前激活的库；无库时返回 null
+  VideoLibrary? get activeLibrary {
+    for (final lib in _libraries) {
+      if (lib.id == _activeLibraryId) return lib;
+    }
+    return _libraries.isNotEmpty ? _libraries.first : null;
+  }
 
   bool get showVideoInfo => _showVideoInfo;
   bool get wheelSwitchVideo => _wheelSwitchVideo;
+  ArrowKeyAction get arrowKeyAction => _arrowKeyAction;
   MobileTapAction get mobileTapAction => _mobileTapAction;
   bool get addToContextMenu => _addToContextMenu;
   DeleteAction get deleteAction => _deleteAction;
@@ -216,7 +273,28 @@ class SettingsProvider extends ChangeNotifier {
   /// 未显式设置过的本地文件夹默认参与共享
   bool isLocalFolderShared(String path) => _lanFolderSharing[path] ?? true;
 
+  /// 所有共享源的全局登记表（供在线探测、封面缓存等底层逻辑使用）
   List<SharedFolderRef> get sharedFolders => List.unmodifiable(_sharedFolders);
+
+  /// 当前激活库绑定的共享文件夹（按全局登记顺序）
+  ///
+  /// 无库时返回全部（迁移期兼容）。
+  List<SharedFolderRef> get activeLibrarySharedFolders {
+    final lib = activeLibrary;
+    if (lib == null) return List.unmodifiable(_sharedFolders);
+    final keys = lib.sharedFolderKeys.toSet();
+    return List.unmodifiable([
+      for (final ref in _sharedFolders)
+        if (keys.contains(ref.key)) ref,
+    ]);
+  }
+
+  /// 某个共享源是否已绑定到当前激活库
+  bool isSharedFolderInActiveLibrary(String key) {
+    final lib = activeLibrary;
+    if (lib == null) return _sharedFolders.any((ref) => ref.key == key);
+    return lib.sharedFolderKeys.contains(key);
+  }
 
   String get deviceId => _deviceId;
   String get deviceName => _deviceName;
@@ -255,6 +333,24 @@ class SettingsProvider extends ChangeNotifier {
 
   void setVideoOrientation(VideoOrientation value) {
     _videoOrientation = value;
+    notifyListeners();
+    _saveSettings();
+  }
+
+  /// 设置字幕字体；空串表示使用系统默认字体（sans-serif）
+  void setSubtitleFontFamily(String value) {
+    final font = value.trim().isEmpty ? 'sans-serif' : value.trim();
+    if (_subtitleFontFamily == font) return;
+    _subtitleFontFamily = font;
+    notifyListeners();
+    _saveSettings();
+  }
+
+  /// 设置字幕字号（自动夹紧到可调范围）
+  void setSubtitleFontSize(int value) {
+    final size = value.clamp(subtitleFontSizeMin, subtitleFontSizeMax);
+    if (_subtitleFontSize == size) return;
+    _subtitleFontSize = size;
     notifyListeners();
     _saveSettings();
   }
@@ -311,7 +407,10 @@ class SettingsProvider extends ChangeNotifier {
   }
 
   void setLastFolderPaths(List<String> value) {
-    _lastFolderPaths = value;
+    final copy = List<String>.of(value);
+    _lastFolderPaths = copy;
+    // 还没有库时自动建立默认库，保证新添加的文件夹有库可归属
+    _ensureActiveLibrary().folderPaths = copy;
     notifyListeners();
     _saveSettings();
   }
@@ -324,6 +423,14 @@ class SettingsProvider extends ChangeNotifier {
 
   void setWheelSwitchVideo(bool value) {
     _wheelSwitchVideo = value;
+    notifyListeners();
+    _saveSettings();
+  }
+
+  /// 设置左右方向键的行为
+  void setArrowKeyAction(ArrowKeyAction value) {
+    if (_arrowKeyAction == value) return;
+    _arrowKeyAction = value;
     notifyListeners();
     _saveSettings();
   }
@@ -475,9 +582,18 @@ class SettingsProvider extends ChangeNotifier {
     _saveSettings();
   }
 
+  /// 添加共享文件夹，并绑定到当前激活的库。
+  ///
+  /// 同一个共享源可以被多个库分别绑定：再次添加时只更新全局登记信息，
+  /// 并确保当前库已包含该绑定。
   void addSharedFolder(SharedFolderRef ref) {
     _sharedFolders.removeWhere((item) => item.key == ref.key);
     _sharedFolders.add(ref);
+    // 还没有库时自动建立默认库，保证共享源有库可绑定
+    final lib = _ensureActiveLibrary();
+    if (!lib.sharedFolderKeys.contains(ref.key)) {
+      lib.sharedFolderKeys.add(ref.key);
+    }
     notifyListeners();
     _saveSettings();
   }
@@ -498,12 +614,214 @@ class SettingsProvider extends ChangeNotifier {
     _saveSettings();
   }
 
-  void removeSharedFolder(String key) {
-    final before = _sharedFolders.length;
-    _sharedFolders.removeWhere((item) => item.key == key);
-    if (_sharedFolders.length == before) return;
+  /// 把共享文件夹从当前激活库解绑。
+  ///
+  /// 若已没有任何库绑定该共享源，则连同全局登记一起清除。
+  void removeSharedFolderFromActiveLibrary(String key) {
+    final lib = activeLibrary;
+    if (lib == null) return;
+    final before = lib.sharedFolderKeys.length;
+    lib.sharedFolderKeys.removeWhere((item) => item == key);
+    if (lib.sharedFolderKeys.length == before) return;
+    _pruneUnusedSharedFolders();
     notifyListeners();
     _saveSettings();
+  }
+
+  /// 清除没有被任何库引用的共享源登记，避免继续探测与缓存无用源
+  void _pruneUnusedSharedFolders() {
+    final used = <String>{
+      for (final lib in _libraries) ...lib.sharedFolderKeys,
+    };
+    _sharedFolders.removeWhere((ref) => !used.contains(ref.key));
+  }
+
+  // ── 多媒体库 ──
+
+  /// 返回当前激活库；一个库都没有时自动创建「默认媒体库」。
+  ///
+  /// 新用户可能先加文件夹/共享源再建库，这里保证数据总有归属。
+  VideoLibrary _ensureActiveLibrary() {
+    final existing = activeLibrary;
+    if (existing != null) return existing;
+    final lib = VideoLibrary(
+      id: 'lib_default',
+      name: _defaultLibraryName(),
+      folderPaths: [],
+    );
+    _libraries.add(lib);
+    _activeLibraryId = lib.id;
+    return lib;
+  }
+
+  /// 设置库列表是否显示隐藏库（关闭时列表中完全不出现）。
+  ///
+  /// 关闭开关时，若当前激活库是隐藏库，会自动切换到第一个未隐藏的库并返回
+  /// true，调用方需要同步 [SlideProvider] 的文件夹。没有未隐藏库时保持原状
+  /// 并返回 false（此时库列表里一个库也不显示）。
+  bool setShowHiddenLibraries(bool value) {
+    if (_showHiddenLibraries == value) return false;
+    _showHiddenLibraries = value;
+
+    var activeChanged = false;
+    if (!value) {
+      final active = activeLibrary;
+      if (active != null && active.hidden) {
+        for (final lib in _libraries) {
+          if (!lib.hidden) {
+            _activeLibraryId = lib.id;
+            _lastFolderPaths = lib.folderPaths;
+            activeChanged = true;
+            break;
+          }
+        }
+      }
+    }
+
+    notifyListeners();
+    _saveSettings();
+    return activeChanged;
+  }
+
+  /// 新建一个空库并切换到它（名称自动去重，避免两个同名库难以区分）
+  void addLibrary(String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return;
+
+    var unique = trimmed;
+    var suffix = 2;
+    while (_libraries.any((lib) => lib.name == unique)) {
+      unique = '$trimmed $suffix';
+      suffix++;
+    }
+
+    final lib = VideoLibrary(
+      id: 'lib_${DateTime.now().microsecondsSinceEpoch}',
+      name: unique,
+      folderPaths: [],
+    );
+    _libraries.add(lib);
+    _activeLibraryId = lib.id;
+    _lastFolderPaths = [];
+    notifyListeners();
+    _saveSettings();
+  }
+
+  void renameLibrary(String id, String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return;
+    for (final lib in _libraries) {
+      if (lib.id != id) continue;
+      if (lib.name == trimmed) return;
+      lib.name = trimmed;
+      notifyListeners();
+      _saveSettings();
+      return;
+    }
+  }
+
+  /// 删除指定库。不删除文件和播放进度；只剩一个库时拒绝删除。
+  void removeLibrary(String id) {
+    if (_libraries.length <= 1) return;
+    final before = _libraries.length;
+    _libraries.removeWhere((lib) => lib.id == id);
+    if (_libraries.length == before) return;
+    if (_activeLibraryId == id) {
+      _activeLibraryId = _libraries.first.id;
+    }
+    _lastFolderPaths = activeLibrary?.folderPaths ?? [];
+    _pruneUnusedSharedFolders();
+    notifyListeners();
+    _saveSettings();
+  }
+
+  /// 切换激活库。调用方需要自行更新 [SlideProvider] 的文件夹并重扫。
+  void switchLibrary(String id) {
+    if (_activeLibraryId == id) return;
+    if (!_libraries.any((lib) => lib.id == id)) return;
+    _activeLibraryId = id;
+    _lastFolderPaths = activeLibrary?.folderPaths ?? [];
+    notifyListeners();
+    _saveSettings();
+  }
+
+  /// 设置某个库是否隐藏。
+  ///
+  /// 若隐藏的正是当前激活库且还有其他未隐藏的库，会自动切换到第一个未隐藏
+  /// 的库，避免当前库从列表中消失后无处可寻。此时返回 true，调用方需要同步
+  /// [SlideProvider] 的文件夹；全部库都被隐藏时保持当前库不变并返回 false。
+  bool setLibraryHidden(String id, bool hidden) {
+    VideoLibrary? target;
+    for (final lib in _libraries) {
+      if (lib.id == id) {
+        target = lib;
+        break;
+      }
+    }
+    if (target == null || target.hidden == hidden) return false;
+
+    target.hidden = hidden;
+    var activeChanged = false;
+    if (hidden && _activeLibraryId == id) {
+      for (final lib in _libraries) {
+        if (!lib.hidden) {
+          _activeLibraryId = lib.id;
+          _lastFolderPaths = lib.folderPaths;
+          activeChanged = true;
+          break;
+        }
+      }
+    }
+    notifyListeners();
+    _saveSettings();
+    return activeChanged;
+  }
+
+  /// 查找包含指定视频路径的库（按文件夹路径前缀匹配）。
+  ///
+  /// 双击打开的视频可能位于库文件夹的任意子目录中，因此用前缀而非精确匹配。
+  /// 同一文件夹可归属多个库，此时返回先命中的那个。找不到返回 null。
+  ///
+  /// [includeHidden] 为 false 时跳过隐藏库，保证切换到的是列表中可见的库。
+  VideoLibrary? libraryContainingPath(
+    String videoPath, {
+    bool includeHidden = true,
+  }) {
+    final video = _normalizePath(videoPath);
+    if (video.isEmpty) return null;
+    for (final lib in _libraries) {
+      if (!includeHidden && lib.hidden) continue;
+      for (final folder in lib.folderPaths) {
+        final root = _normalizePath(folder);
+        if (root.isEmpty) continue;
+        if (video == root || video.startsWith('$root/')) return lib;
+      }
+    }
+    return null;
+  }
+
+  /// 双击打开视频时自动切换库：
+  /// 若视频属于某个库且该库不是当前激活库，则切换并返回 true。
+  ///
+  /// 隐藏库仅在开启「显示隐藏媒体库」时才参与匹配：开关关闭时它不出现在
+  /// 列表中，切过去会与界面状态矛盾。
+  bool switchToLibraryForPath(String videoPath) {
+    final lib = libraryContainingPath(
+      videoPath,
+      includeHidden: _showHiddenLibraries,
+    );
+    if (lib == null || lib.id == _activeLibraryId) return false;
+    switchLibrary(lib.id);
+    return true;
+  }
+
+  /// 归一化路径用于前缀比较：统一分隔符、去掉末尾分隔符，Windows 下忽略大小写
+  static String _normalizePath(String path) {
+    var normalized = path.trim().replaceAll('\\', '/');
+    while (normalized.length > 1 && normalized.endsWith('/')) {
+      normalized = normalized.substring(0, normalized.length - 1);
+    }
+    return Platform.isWindows ? normalized.toLowerCase() : normalized;
   }
 
   // 获取BoxFit枚举
@@ -531,6 +849,16 @@ class SettingsProvider extends ChangeNotifier {
     _loopPlay = prefs.getBool('loopPlay') ?? false;
     _autoPlay = prefs.getBool('autoPlay') ?? true;
     _videoFitMode = VideoFitMode.values[prefs.getInt('videoFitMode') ?? 0];
+    final savedSubtitleFont = prefs.getString('subtitleFontFamily');
+    _subtitleFontFamily =
+        savedSubtitleFont == null || savedSubtitleFont.trim().isEmpty
+        ? 'sans-serif'
+        : savedSubtitleFont.trim();
+    _subtitleFontSize =
+        (prefs.getInt('subtitleFontSize') ?? subtitleFontSizeDefault).clamp(
+          subtitleFontSizeMin,
+          subtitleFontSizeMax,
+        );
     _startFullscreen = prefs.getBool('startFullscreen') ?? true;
     _hideToolbar = prefs.getBool('hideToolbar') ?? true;
     _controlsHideDelay = prefs.getInt('controlsHideDelay') ?? 3;
@@ -573,6 +901,11 @@ class SettingsProvider extends ChangeNotifier {
     _lastCopyDestination = prefs.getString('lastCopyDestination');
 
     _wheelSwitchVideo = prefs.getBool('wheelSwitchVideo') ?? true;
+    final arrowKeyActionIndex = (prefs.getInt('arrowKeyAction') ?? 0).clamp(
+      0,
+      ArrowKeyAction.values.length - 1,
+    );
+    _arrowKeyAction = ArrowKeyAction.values[arrowKeyActionIndex];
     final mobileTapIndex = (prefs.getInt('mobileTapAction') ?? 0).clamp(
       0,
       MobileTapAction.values.length - 1,
@@ -583,6 +916,44 @@ class SettingsProvider extends ChangeNotifier {
     _videoOrientation =
         VideoOrientation.values[prefs.getInt('videoOrientation') ?? 2];
     _languageIndex = prefs.getInt('languageIndex') ?? 0;
+
+    // 多媒体库：优先读取已保存的库列表；老用户只有 lastFolderPaths 时
+    // 自动迁移为「默认媒体库」，文件夹、排序与进度都保持不变。
+    _libraries = [];
+    // 旧版本的库 JSON 没有 sharedFolderKeys 字段，需要把已登记的共享源
+    // 归入当前库（读取完 sharedFolders 后再执行，见下方）
+    var legacyLibraryFormat = false;
+    final librariesStr = prefs.getString('libraries');
+    if (librariesStr != null) {
+      try {
+        final decoded = json.decode(librariesStr);
+        if (decoded is List) {
+          for (final entry in decoded) {
+            if (entry is Map && entry['sharedFolderKeys'] is! List) {
+              legacyLibraryFormat = true;
+            }
+            final lib = VideoLibrary.fromJson(entry);
+            if (lib != null) _libraries.add(lib);
+          }
+        }
+      } catch (_) {
+        // 数据损坏时忽略，走下方迁移逻辑
+      }
+    }
+    _activeLibraryId = prefs.getString('activeLibraryId') ?? '';
+    final hasActive = _libraries.any((lib) => lib.id == _activeLibraryId);
+    if (_libraries.isEmpty && _lastFolderPaths.isNotEmpty) {
+      final defaultLib = VideoLibrary(
+        id: 'lib_default',
+        name: _defaultLibraryName(),
+        folderPaths: List<String>.of(_lastFolderPaths),
+      );
+      _libraries.add(defaultLib);
+      _activeLibraryId = defaultLib.id;
+    } else if (_libraries.isNotEmpty && !hasActive) {
+      _activeLibraryId = _libraries.first.id;
+    }
+    _showHiddenLibraries = prefs.getBool('showHiddenLibraries') ?? false;
 
     // 内网共享
     _lanShareEnabled = prefs.getBool('lanShareEnabled') ?? false;
@@ -624,6 +995,19 @@ class SettingsProvider extends ChangeNotifier {
       }
     }
 
+    // 旧版本的库没有共享绑定字段：把已登记的全部共享源归入当前库，
+    // 保持升级前的可见范围不变。
+    if (legacyLibraryFormat && _sharedFolders.isNotEmpty) {
+      final lib = activeLibrary;
+      if (lib != null) {
+        for (final ref in _sharedFolders) {
+          if (!lib.sharedFolderKeys.contains(ref.key)) {
+            lib.sharedFolderKeys.add(ref.key);
+          }
+        }
+      }
+    }
+
     _deviceId = prefs.getString('deviceId') ?? '';
     if (_deviceId.isEmpty) {
       _deviceId = _generateDeviceId();
@@ -645,6 +1029,8 @@ class SettingsProvider extends ChangeNotifier {
     await prefs.setBool('loopPlay', _loopPlay);
     await prefs.setBool('autoPlay', _autoPlay);
     await prefs.setInt('videoFitMode', _videoFitMode.index);
+    await prefs.setString('subtitleFontFamily', _subtitleFontFamily);
+    await prefs.setInt('subtitleFontSize', _subtitleFontSize);
     await prefs.setBool('startFullscreen', _startFullscreen);
     await prefs.setBool('hideToolbar', _hideToolbar);
     await prefs.setInt('controlsHideDelay', _controlsHideDelay);
@@ -658,6 +1044,7 @@ class SettingsProvider extends ChangeNotifier {
     await prefs.setBool('showVideoInfo', _showVideoInfo);
     await prefs.setInt('languageIndex', _languageIndex);
     await prefs.setBool('wheelSwitchVideo', _wheelSwitchVideo);
+    await prefs.setInt('arrowKeyAction', _arrowKeyAction.index);
     await prefs.setInt('mobileTapAction', _mobileTapAction.index);
     await prefs.setBool('addToContextMenu', _addToContextMenu);
     await prefs.setString('excludedPaths', json.encode(_excludedPaths));
@@ -691,6 +1078,14 @@ class SettingsProvider extends ChangeNotifier {
     );
     await prefs.setString('deviceId', _deviceId);
     await prefs.setString('deviceName', _deviceName);
+
+    // 多媒体库
+    await prefs.setString(
+      'libraries',
+      json.encode(_libraries.map((e) => e.toJson()).toList()),
+    );
+    await prefs.setString('activeLibraryId', _activeLibraryId);
+    await prefs.setBool('showHiddenLibraries', _showHiddenLibraries);
   }
 
   /// 把持久化的浏览格式 id 还原为枚举；未知 id 返回 null
@@ -718,6 +1113,17 @@ class SettingsProvider extends ChangeNotifier {
       // 数据损坏时退回空表
     }
     return {};
+  }
+
+  /// 老数据迁移时创建的默认库名称。
+  ///
+  /// 通过 [AppLocalizations.fromIndex] 解析语言：索引 0（跟随系统）会按系统
+  /// 语言选择文案，其余索引与 [AppLanguage] 枚举一致。
+  String _defaultLibraryName() {
+    final loc = AppLocalizations.fromIndex(_languageIndex);
+    if (loc.isEn) return 'Default Library';
+    if (loc.isZhTW) return '預設媒體庫';
+    return '默认媒体库';
   }
 
   /// 设备名称：桌面端用主机名，其余平台用系统标识

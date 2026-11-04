@@ -106,6 +106,12 @@ class OpenVideoFromPath {
     required String videoPath,
     bool popFirst = false,
   }) async {
+    // 双击打开的视频若属于某个媒体库，先切到该库，让界面与播放内容一致；
+    // 不在任何库内则保持当前库不变。
+    if (settings.switchToLibraryForPath(videoPath)) {
+      slideProvider.setFolderPaths(settings.lastFolderPaths);
+    }
+
     final result = await scanWithOrder(videoPath, settings);
     if (result == null) return;
     final (videos, order) = result;

@@ -44,7 +44,8 @@ class VideoContextMenu extends StatefulWidget {
   final List<double> rates;
   final String Function(double rate) rateLabel;
 
-  /// 一级菜单操作（'zoomIn' / 'zoomOut' / 'fit' / 'rotate'）。
+  /// 一级菜单操作（'zoomIn' / 'zoomOut' / 'rotate' / 'flip' /
+  /// 'subtitleLarger' / 'subtitleSmaller'）。
   final ValueChanged<String> onAction;
 
   /// 选中某个倍速档位。
@@ -107,8 +108,10 @@ class _VideoContextMenuState extends State<VideoContextMenu>
   @override
   void initState() {
     super.initState();
-    _fadeController = AnimationController(vsync: this, duration: _fadeInDuration)
-      ..forward();
+    _fadeController = AnimationController(
+      vsync: this,
+      duration: _fadeInDuration,
+    )..forward();
     WidgetsBinding.instance.addPostFrameCallback((_) => _measureAndClamp());
   }
 
@@ -237,15 +240,17 @@ class _VideoContextMenuState extends State<VideoContextMenu>
                 subSize: _speedSubSize,
                 subKey: _speedSubKey,
                 items: widget.rates
-                    .map((r) => _TrackMenuItem(
-                          id: r.toString(),
-                          label: widget.rateLabel(r),
-                          isSelected: widget.currentRate == r,
-                          onTap: () {
-                            _closeCascade();
-                            widget.onRateSelected(r);
-                          },
-                        ))
+                    .map(
+                      (r) => _TrackMenuItem(
+                        id: r.toString(),
+                        label: widget.rateLabel(r),
+                        isSelected: widget.currentRate == r,
+                        onTap: () {
+                          _closeCascade();
+                          widget.onRateSelected(r);
+                        },
+                      ),
+                    )
                     .toList(),
               ),
             if (_activeCascade == 'audio' &&
@@ -257,15 +262,17 @@ class _VideoContextMenuState extends State<VideoContextMenu>
                 subSize: _audioSubSize,
                 subKey: _audioSubKey,
                 items: _realAudioTracks
-                    .map((t) => _TrackMenuItem(
-                          id: t.id,
-                          label: _audioTrackLabel(t),
-                          isSelected: _selectedAudioId == t.id,
-                          onTap: () {
-                            _closeCascade();
-                            widget.onAudioTrackSelected!(t);
-                          },
-                        ))
+                    .map(
+                      (t) => _TrackMenuItem(
+                        id: t.id,
+                        label: _audioTrackLabel(t),
+                        isSelected: _selectedAudioId == t.id,
+                        onTap: () {
+                          _closeCascade();
+                          widget.onAudioTrackSelected!(t);
+                        },
+                      ),
+                    )
                     .toList(),
               ),
             if (_activeCascade == 'subtitle' &&
@@ -277,15 +284,17 @@ class _VideoContextMenuState extends State<VideoContextMenu>
                 subSize: _subtitleSubSize,
                 subKey: _subtitleSubKey,
                 items: _realSubtitleTracks
-                    .map((t) => _TrackMenuItem(
-                          id: t.id,
-                          label: _subtitleTrackLabel(t),
-                          isSelected: _selectedSubtitleId == t.id,
-                          onTap: () {
-                            _closeCascade();
-                            widget.onSubtitleTrackSelected!(t);
-                          },
-                        ))
+                    .map(
+                      (t) => _TrackMenuItem(
+                        id: t.id,
+                        label: _subtitleTrackLabel(t),
+                        isSelected: _selectedSubtitleId == t.id,
+                        onTap: () {
+                          _closeCascade();
+                          widget.onSubtitleTrackSelected!(t);
+                        },
+                      ),
+                    )
                     .toList(),
               ),
           ],
@@ -345,9 +354,7 @@ class _VideoContextMenuState extends State<VideoContextMenu>
 
   int get _rowIndexOfAudio => _audioVisible ? _rowIndexOfSpeed + 1 : -1;
   int get _rowIndexOfSubtitle =>
-      _subtitleVisible
-          ? _rowIndexOfSpeed + 1 + (_audioVisible ? 1 : 0)
-          : -1;
+      _subtitleVisible ? _rowIndexOfSpeed + 1 + (_audioVisible ? 1 : 0) : -1;
 
   String _audioTrackLabel(AudioTrack t) {
     final name = t.title ?? t.language ?? t.codec ?? t.id;
@@ -411,6 +418,20 @@ class _VideoContextMenuState extends State<VideoContextMenu>
         ),
       );
     }
+    // 字幕字号快捷调整：点击立即生效，不弹二级菜单
+    children
+      ..add(
+        _menuItemRow(
+          label: widget.l10n.subtitleLarger,
+          onTap: () => widget.onAction('subtitleLarger'),
+        ),
+      )
+      ..add(
+        _menuItemRow(
+          label: widget.l10n.subtitleSmaller,
+          onTap: () => widget.onAction('subtitleSmaller'),
+        ),
+      );
 
     return Material(
       key: _rootKey,
@@ -422,10 +443,7 @@ class _VideoContextMenuState extends State<VideoContextMenu>
         // 正常菜单字号：M3 默认的 titleMedium（16px/w500）偏大，
         // 用 bodyMedium（14px 常规）更接近系统右键菜单的观感
         style: theme.textStyle ?? Theme.of(context).textTheme.bodyMedium!,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: children,
-        ),
+        child: Column(mainAxisSize: MainAxisSize.min, children: children),
       ),
     );
   }
@@ -467,9 +485,7 @@ class _VideoContextMenuState extends State<VideoContextMenu>
                 Icon(
                   Icons.chevron_right,
                   size: 18,
-                  color: isOpen
-                      ? Theme.of(context).colorScheme.primary
-                      : null,
+                  color: isOpen ? Theme.of(context).colorScheme.primary : null,
                 ),
               ],
             ),
@@ -494,7 +510,8 @@ class _VideoContextMenuState extends State<VideoContextMenu>
     var topLeft = rootPos + Offset(rootWidth, entryRowTop);
     if (subSize != null) {
       final insets = MediaQuery.viewPaddingOf(context);
-      final fitsRight = topLeft.dx + subSize.width <=
+      final fitsRight =
+          topLeft.dx + subSize.width <=
           widget.overlaySize.width - _screenPadding - insets.right;
       final fitsLeft =
           rootPos.dx - subSize.width >= _screenPadding + insets.left;
