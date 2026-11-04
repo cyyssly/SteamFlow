@@ -5,7 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:steam_flow/l10n/app_localizations.dart';
 
 /// 展示用版本号（与 pubspec.yaml 的 version 保持一致，改版本时需同步）
-const String appVersionLabel = 'V1.3.2';
+const String appVersionLabel = 'V1.3.3';
 
 /// 帮助页：说明文档 / 关于 / 赞助
 ///
@@ -15,6 +15,10 @@ class HelpScreen extends StatefulWidget {
   const HelpScreen({super.key});
 
   static const String githubUrl = 'https://github.com/cyyssly/SteamFlow';
+
+  /// 姐妹应用 FrameFlow 的项目主页
+  static const String frameFlowUrl = 'https://github.com/cyyssly/FrameFlow';
+
   static const String sponsorUrl = 'https://ifdian.net/a/sly345678/plan';
 
   /// 宽度达到该值（且非手机端）时使用两栏布局
@@ -147,10 +151,19 @@ class _HelpScreenState extends State<HelpScreen> {
     if (!HelpScreen._isMobile) _bullet(loc.helpLanTray),
   ];
 
-  /// 关于：版本信息 + GitHub 链接
+  /// 关于：版本信息 + GitHub 链接 + 姐妹应用 FrameFlow
   List<Widget> _aboutChildren(AppLocalizations loc) => [
     _infoRow(Icons.info_outline, loc.helpVersionLabel, appVersionLabel),
     _linkRow(Icons.code, loc.helpGitHub, HelpScreen.githubUrl),
+    _groupTitle(loc.helpSisterAppTitle),
+    Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Text(
+        loc.helpSisterAppDesc,
+        style: const TextStyle(fontSize: 14, color: Colors.white70),
+      ),
+    ),
+    _linkRow(Icons.photo_library, 'FrameFlow', HelpScreen.frameFlowUrl),
   ];
 
   /// 赞助：简短说明 + 赞助页链接

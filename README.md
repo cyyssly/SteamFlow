@@ -189,6 +189,12 @@ steam_flow/
 | 信息显示设置 | 视频信息显示、信息条自动隐藏 |
 | 快捷键与控制 | 滚轮行为（`Ctrl`/`Shift` 反向）、删除行为（`Ctrl+Del` 反向）、短按行为（手机端：播放 / 选中） |
 
+## 姐妹项目：FrameFlow
+
+[FrameFlow](https://github.com/cyyssly/FrameFlow) 是同一作者开发的跨平台图片幻灯片应用，同样基于 Flutter，专注图片浏览与幻灯片播放。
+
+> 视频用 SteamFlow，图片用 FrameFlow。
+
 ## 关于作者
 
 - **GitHub**: [cyyssly](https://github.com/cyyssly)

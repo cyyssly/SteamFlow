@@ -537,6 +537,13 @@ class AppLocalizations {
   String get helpVersionLabel => _t('版本', 'Version', '版本');
   String get helpGitHub =>
       _t('GitHub 项目主页', 'GitHub Repository', 'GitHub 專案主頁');
+  String get helpSisterAppTitle =>
+      _t('姐妹应用：FrameFlow', 'Sister App: FrameFlow', '姊妹應用：FrameFlow');
+  String get helpSisterAppDesc => _t(
+    'FrameFlow 是同一作者开发的跨平台图片幻灯片应用。视频用 SteamFlow，图片用 FrameFlow。',
+    'FrameFlow is a cross-platform image slideshow app by the same author. Videos with SteamFlow, photos with FrameFlow.',
+    'FrameFlow 是同一作者開發的跨平台圖片幻燈片應用。視頻用 SteamFlow，圖片用 FrameFlow。',
+  );
   String get helpSponsorDesc => _t(
     '本应用完全免费、无广告，如果它帮到了你，欢迎赞助支持。',
     'This app is completely free and ad-free. If it helps you, a donation is welcome.',
