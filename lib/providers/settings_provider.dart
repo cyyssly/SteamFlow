@@ -188,7 +188,11 @@ class SettingsProvider extends ChangeNotifier {
   String _deviceName = _defaultDeviceName();
 
   // Getters
-  List<String> get excludedPaths => List.unmodifiable(_excludedPaths);
+
+  /// 当前激活库排除播放的视频路径；无库时回退到全局记录（迁移期兼容）。
+  ///
+  /// 排除是按库生效的：在 A 库排除的视频，切到 B 库后仍会正常播放。
+  List<String> get excludedPaths => List.unmodifiable(_excludedList);
 
   /// 读取某个本地文件夹上次使用的排序方式；未记录时返回 null（跟随设置页）
   String? localSortFor(String folderPath) => _localSortModes[folderPath];
@@ -247,6 +251,12 @@ class SettingsProvider extends ChangeNotifier {
       if (lib.id == _activeLibraryId) return lib;
     }
     return _libraries.isNotEmpty ? _libraries.first : null;
+  }
+
+  /// 排除列表的实际存储位置：优先当前库，无库时用全局记录（迁移期兼容）
+  List<String> get _excludedList {
+    final lib = activeLibrary;
+    return lib != null ? lib.excludedPaths : _excludedPaths;
   }
 
   bool get showVideoInfo => _showVideoInfo;
@@ -464,18 +474,21 @@ class SettingsProvider extends ChangeNotifier {
   }
 
   void addExcludedPath(String path) {
-    if (!_excludedPaths.contains(path)) {
-      _excludedPaths.add(path);
+    // 还没有库时自动建立默认库，保证排除记录有库可归属
+    final list = _ensureActiveLibrary().excludedPaths;
+    if (!list.contains(path)) {
+      list.add(path);
       notifyListeners();
       _saveSettings();
     }
   }
 
   void removeExcludedPath(String path) {
-    final before = _excludedPaths.length;
+    final list = _excludedList;
+    final before = list.length;
     // 历史数据里可能存在重复路径，这里一次性全部移除
-    _excludedPaths.removeWhere((item) => item == path);
-    if (_excludedPaths.length == before) return;
+    list.removeWhere((item) => item == path);
+    if (list.length == before) return;
     notifyListeners();
     _saveSettings();
   }
@@ -484,15 +497,18 @@ class SettingsProvider extends ChangeNotifier {
   void removeExcludedPaths(Iterable<String> paths) {
     final targets = paths.toSet();
     if (targets.isEmpty) return;
-    final before = _excludedPaths.length;
-    _excludedPaths.removeWhere(targets.contains);
-    if (_excludedPaths.length == before) return;
+    final list = _excludedList;
+    final before = list.length;
+    list.removeWhere(targets.contains);
+    if (list.length == before) return;
     notifyListeners();
     _saveSettings();
   }
 
   void clearExcludedPaths() {
-    _excludedPaths.clear();
+    final list = _excludedList;
+    if (list.isEmpty) return;
+    list.clear();
     notifyListeners();
     _saveSettings();
   }
@@ -920,9 +936,10 @@ class SettingsProvider extends ChangeNotifier {
     // 多媒体库：优先读取已保存的库列表；老用户只有 lastFolderPaths 时
     // 自动迁移为「默认媒体库」，文件夹、排序与进度都保持不变。
     _libraries = [];
-    // 旧版本的库 JSON 没有 sharedFolderKeys 字段，需要把已登记的共享源
-    // 归入当前库（读取完 sharedFolders 后再执行，见下方）
+    // 旧版本的库 JSON 没有 sharedFolderKeys / excludedPaths 字段，
+    // 需要在读取完共享源与排除记录后把旧数据归入当前库（见下方）
     var legacyLibraryFormat = false;
+    var legacyExcludedFormat = false;
     final librariesStr = prefs.getString('libraries');
     if (librariesStr != null) {
       try {
@@ -931,6 +948,9 @@ class SettingsProvider extends ChangeNotifier {
           for (final entry in decoded) {
             if (entry is Map && entry['sharedFolderKeys'] is! List) {
               legacyLibraryFormat = true;
+            }
+            if (entry is Map && entry['excludedPaths'] is! List) {
+              legacyExcludedFormat = true;
             }
             final lib = VideoLibrary.fromJson(entry);
             if (lib != null) _libraries.add(lib);
@@ -954,6 +974,15 @@ class SettingsProvider extends ChangeNotifier {
       _activeLibraryId = _libraries.first.id;
     }
     _showHiddenLibraries = prefs.getBool('showHiddenLibraries') ?? false;
+
+    // 旧版本没有按库区分排除记录：把旧的全局排除列表归入当前库，
+    // 保证升级后「已排除」列表与之前一致。
+    if (legacyExcludedFormat && _excludedPaths.isNotEmpty) {
+      final lib = activeLibrary;
+      if (lib != null && lib.excludedPaths.isEmpty) {
+        lib.excludedPaths.addAll(_excludedPaths);
+      }
+    }
 
     // 内网共享
     _lanShareEnabled = prefs.getBool('lanShareEnabled') ?? false;
@@ -1047,7 +1076,12 @@ class SettingsProvider extends ChangeNotifier {
     await prefs.setInt('arrowKeyAction', _arrowKeyAction.index);
     await prefs.setInt('mobileTapAction', _mobileTapAction.index);
     await prefs.setBool('addToContextMenu', _addToContextMenu);
-    await prefs.setString('excludedPaths', json.encode(_excludedPaths));
+    // 兼容旧版本：把当前库的排除记录同步到旧的全局键（仅作降级兜底）
+    final activeForExcluded = activeLibrary;
+    await prefs.setString(
+      'excludedPaths',
+      json.encode(activeForExcluded?.excludedPaths ?? _excludedPaths),
+    );
     await prefs.setString('localSortModes', json.encode(_localSortModes));
     await prefs.setString('sharedSortModes', json.encode(_sharedSortModes));
     await prefs.setInt('browseLayout', _browseLayout.index);

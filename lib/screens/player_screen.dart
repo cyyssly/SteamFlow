@@ -76,6 +76,13 @@ class _PlayerScreenState extends State<PlayerScreen>
   Duration _videoDuration = Duration.zero;
   int? _videoWidth;
   int? _videoHeight;
+
+  /// 最近一次已知的视频朝向（true=横屏视频；null=尚未得知）。
+  ///
+  /// 换片时 [_videoWidth]/[_videoHeight] 会被清空，但设备方向不应因此解锁
+  /// 回竖屏。「跟随视频」在尺寸就绪前沿用上一次的朝向，避免连续两个横屏
+  /// 视频之间先转竖屏再转横屏。
+  bool? _lastVideoIsLandscape;
   String? _playbackError;
 
   /// 进入本页时是否已经处于全屏。
@@ -567,6 +574,15 @@ class _PlayerScreenState extends State<PlayerScreen>
     final newWidth = width ?? _videoWidth;
     final newHeight = height ?? _videoHeight;
     if (newWidth == _videoWidth && newHeight == _videoHeight) return;
+
+    // 记录最近一次有效的朝向：换片后尺寸未就绪时，「跟随视频」沿用它锁定
+    // 设备方向，避免中途解锁转回竖屏
+    if (newWidth != null &&
+        newHeight != null &&
+        newWidth > 0 &&
+        newHeight > 0) {
+      _lastVideoIsLandscape = newWidth >= newHeight;
+    }
 
     final settings = Provider.of<SettingsProvider>(context, listen: false);
     final slideProvider = Provider.of<SlideProvider>(context, listen: false);
@@ -2241,6 +2257,14 @@ class _PlayerScreenState extends State<PlayerScreen>
     return intrinsic.width > intrinsic.height;
   }
 
+  /// 「跟随视频」应采用的朝向：尺寸就绪时取实际比例，尚未就绪时沿用上一次
+  /// 已知的朝向（null 表示从未拿到过尺寸）。
+  bool? get _videoLandscapeHint {
+    final intrinsic = _intrinsicSize;
+    if (intrinsic != null) return intrinsic.width >= intrinsic.height;
+    return _lastVideoIsLandscape;
+  }
+
   /// 根据设置锁定屏幕方向（移动端使用）。
   ///
   /// 若 [_playerTempOrientation] 非 null，则优先使用它（移动端按钮临时切换覆盖）。
@@ -2267,18 +2291,21 @@ class _PlayerScreenState extends State<PlayerScreen>
         // 让播放界面和视频一起转成横屏 / 竖屏（桌面端窗口不转，画面由
         // [_computeAutoRotation] 旋转）。
         if (Platform.isAndroid || Platform.isIOS) {
-          if (_isLandscapeVideo()) {
+          // 尺寸未就绪时沿用上一次已知朝向：换片瞬间不至于解锁回竖屏，
+          // 连续两个同朝向的视频之间不会出现多余的旋转
+          final landscape = _videoLandscapeHint;
+          if (landscape == true) {
             SystemChrome.setPreferredOrientations([
               DeviceOrientation.landscapeLeft,
               DeviceOrientation.landscapeRight,
             ]);
-          } else if (_isPortraitVideo()) {
+          } else if (landscape == false) {
             SystemChrome.setPreferredOrientations([
               DeviceOrientation.portraitUp,
               DeviceOrientation.portraitDown,
             ]);
           } else {
-            // 尺寸未就绪或近似正方形：先不锁，等尺寸到位再应用
+            // 从未拿到过尺寸：先不锁，等尺寸到位再应用
             SystemChrome.setPreferredOrientations(DeviceOrientation.values);
           }
         } else {

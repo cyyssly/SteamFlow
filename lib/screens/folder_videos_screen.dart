@@ -301,8 +301,10 @@ class _FolderVideosScreenState extends State<FolderVideosScreen>
       await _precacheBatch(batch);
       // 期间发生过重新排序：本批属于旧顺序，直接作废
       if (generation != _batchGeneration) return;
-      // 宽高比与像素都已就绪，才允许 _loadMore 把这一批显示出来
-      _loadedCount = end;
+      // 宽高比与像素都已就绪，才允许 _loadMore 把这一批显示出来。
+      // 预加载期间可能排除了视频，end 是旧列表长度下的下标，需要按当前
+      // 列表重新收敛，避免超过 _allItems.length 后让分页无法结束。
+      _loadedCount = end.clamp(_items.length, _allItems.length);
     } finally {
       _isPreloading = false;
     }
@@ -537,14 +539,25 @@ class _FolderVideosScreenState extends State<FolderVideosScreen>
     );
   }
 
-  // ── 单图操作 ──
+  // ── 单个视频操作 ──
+
+  /// 从浏览列表移除视频，并同步预加载计数。
+  ///
+  /// [_items] 始终是 [_allItems] 的前缀；若移除的是已预加载范围内的视频，
+  /// [_loadedCount] 也必须减少，否则末尾会出现 sublist 越界或加载提示不消失。
+  void _removeFromLists(String path) {
+    final index = _allItems.indexWhere((item) => item.path == path);
+    if (index < 0) return;
+    _allItems.removeAt(index);
+    _items.removeWhere((item) => item.path == path);
+    if (index < _loadedCount) _loadedCount--;
+    _loadedCount = _loadedCount.clamp(_items.length, _allItems.length);
+  }
+
   void _excludeVideo(String path) {
     final settings = Provider.of<SettingsProvider>(context, listen: false);
     settings.addExcludedPath(path);
-    setState(() {
-      _items.removeWhere((item) => item.path == path);
-      _allItems.removeWhere((item) => item.path == path);
-    });
+    setState(() => _removeFromLists(path));
     _showSnack(AppLocalizations.of(context).excluded);
   }
 
@@ -565,10 +578,7 @@ class _FolderVideosScreenState extends State<FolderVideosScreen>
       _showSnack(AppLocalizations.of(context).deleteFailed);
       return;
     }
-    setState(() {
-      _items.removeWhere((i) => i.path == item.path);
-      _allItems.removeWhere((i) => i.path == item.path);
-    });
+    setState(() => _removeFromLists(item.path));
     _showSnack(AppLocalizations.of(context).deletedToTrash);
   }
 

@@ -17,6 +17,9 @@ class VideoLibrary {
   /// 该库绑定的共享文件夹键（与 `SharedFolderRef.key` 一致）
   List<String> sharedFolderKeys;
 
+  /// 该库排除播放的视频路径（只在当前库生效，不影响其他库）
+  List<String> excludedPaths;
+
   /// 是否隐藏。隐藏库默认不出现在库列表中，仅在开启「显示隐藏媒体库」时
   /// 以半透明样式展示。
   bool hidden;
@@ -26,14 +29,17 @@ class VideoLibrary {
     required this.name,
     required this.folderPaths,
     List<String>? sharedFolderKeys,
+    List<String>? excludedPaths,
     this.hidden = false,
-  }) : sharedFolderKeys = sharedFolderKeys ?? [];
+  }) : sharedFolderKeys = sharedFolderKeys ?? [],
+       excludedPaths = excludedPaths ?? [];
 
   Map<String, dynamic> toJson() => {
     'id': id,
     'name': name,
     'folderPaths': folderPaths,
     'sharedFolderKeys': sharedFolderKeys,
+    'excludedPaths': excludedPaths,
     'hidden': hidden,
   };
 
@@ -44,6 +50,7 @@ class VideoLibrary {
     final name = value['name'];
     final folderPaths = value['folderPaths'];
     final sharedFolderKeys = value['sharedFolderKeys'];
+    final excludedPaths = value['excludedPaths'];
     if (id is! String || name is! String) return null;
     return VideoLibrary(
       id: id,
@@ -53,6 +60,9 @@ class VideoLibrary {
           : [],
       sharedFolderKeys: sharedFolderKeys is List
           ? sharedFolderKeys.whereType<String>().toList()
+          : [],
+      excludedPaths: excludedPaths is List
+          ? excludedPaths.whereType<String>().toList()
           : [],
       hidden: value['hidden'] == true,
     );
