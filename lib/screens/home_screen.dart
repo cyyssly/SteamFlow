@@ -89,8 +89,8 @@ class _HomeScreenState extends State<HomeScreen> {
           if (isRandomMode) {
             final now = DateTime.now();
             if (now.difference(lastUpdateTime) >= updateInterval) {
-              final newVideos = uniqueVideos.values.toList()
-                ..sort((a, b) => compareFileNames(a.name, b.name));
+              final newVideos = uniqueVideos.values.toList();
+              sortByFileName(newVideos, (video) => video.name);
               if (hasStartedPlaying) {
                 slideProvider.addNewVideos(
                   newVideos,
@@ -123,8 +123,8 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       // 所有文件夹扫描完毕
-      final allVideos = uniqueVideos.values.toList()
-        ..sort((a, b) => compareFileNames(a.name, b.name));
+      final allVideos = uniqueVideos.values.toList();
+      sortByFileName(allVideos, (video) => video.name);
 
       if (allVideos.isEmpty) {
         setState(() {
@@ -172,8 +172,8 @@ class _HomeScreenState extends State<HomeScreen> {
     SettingsProvider settingsProvider,
   ) async {
     // 对已收集的视频进行排序
-    final sortedVideos = videos.toList()
-      ..sort((a, b) => compareFileNames(a.name, b.name));
+    final sortedVideos = videos.toList();
+    sortByFileName(sortedVideos, (video) => video.name);
 
     slideProvider.setVideos(
       sortedVideos,
@@ -234,8 +234,8 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       // 按文件名排序
-      final sortedVideos = uniqueVideos.values.toList()
-        ..sort((a, b) => compareFileNames(a.name, b.name));
+      final sortedVideos = uniqueVideos.values.toList();
+      sortByFileName(sortedVideos, (video) => video.name);
 
       if (sortedVideos.isEmpty) {
         if (!mounted) return;

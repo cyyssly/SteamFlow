@@ -358,11 +358,15 @@ class AppLocalizations {
   String videosTotal(int c) => _t('共 $c 个视频', '$c videos', '共 $c 個視頻');
   String videosCount(int c) => _t('$c 个视频', '$c videos', '$c 個視頻');
   String filesCount(int c) => _t('包含$c个文件', '$c files', '包含$c個文件');
-  String folderContentCount(int subfolders, int files) => _t(
-    '包含$subfolders个子文件夹，共$files个文件',
-    '$subfolders subfolders, $files files',
-    '包含$subfolders個子文件夾，共$files個文件',
-  );
+  String folderContentCount(int subfolders, int files) {
+    // 没有子文件夹时省略“0 个子文件夹”，只报告文件数量
+    if (subfolders <= 0) return filesCount(files);
+    return _t(
+      '包含$subfolders个子文件夹，共$files个文件',
+      '$subfolders subfolders, $files files',
+      '包含$subfolders個子文件夾，共$files個文件',
+    );
+  }
 
   // 消息
   String msgScanComplete(int c) =>

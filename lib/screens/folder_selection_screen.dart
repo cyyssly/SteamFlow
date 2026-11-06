@@ -227,9 +227,10 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
         }
       }
     } else {
-      // 桌面端使用原生目录选择对话框（带互斥保护，避免重复弹窗导致原生崩溃）
-      final result = await DirectoryPickerService.pickDirectory();
-      if (result != null) {
+      // 桌面端使用原生目录选择对话框，支持一次选择多个文件夹
+      // （带互斥保护，避免重复弹窗导致原生崩溃）
+      final results = await DirectoryPickerService.pickDirectories();
+      if (results.isNotEmpty) {
         if (!mounted) return;
         final slideProvider = Provider.of<SlideProvider>(
           context,
@@ -239,11 +240,15 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
           context,
           listen: false,
         );
-        slideProvider.addFolderPath(result);
+        for (final path in results) {
+          slideProvider.addFolderPath(path);
+        }
         settingsProvider.setLastFolderPaths(slideProvider.folderPaths);
 
         // 计算新添加文件夹的统计信息
-        _countFolderVideos(result);
+        for (final path in results) {
+          _countFolderVideos(path);
+        }
       }
     }
   }
@@ -987,8 +992,8 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
         _showSnack(AppLocalizations.of(context).msgNoVideos);
         return;
       }
-      final videos = unique.values.toList()
-        ..sort((a, b) => compareFileNames(a.name, b.name));
+      final videos = unique.values.toList();
+      sortByFileName(videos, (video) => video.name);
       slide.setVideos(videos, playOrder: settings.playOrder);
       slide.sortByPlayOrder(settings.playOrder);
       slide.goToVideo(0);
@@ -1012,7 +1017,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
     try {
       final unique = <String, VideoItem>{};
       for (final ref in refs) {
-        if (!lan.isDeviceReachable(ref.deviceId)) continue;
+        if (!lan.isSharedFolderReachable(ref)) continue;
         final videos = await lan.loadSharedFolderVideos(ref);
         if (videos == null) continue;
         for (final video in videos) {
@@ -1024,8 +1029,8 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
         _showSnack(AppLocalizations.of(context).lanLoadFailed);
         return;
       }
-      final videos = unique.values.toList()
-        ..sort((a, b) => compareFileNames(a.name, b.name));
+      final videos = unique.values.toList();
+      sortByFileName(videos, (video) => video.name);
       slide.setVideos(videos, playOrder: settings.playOrder);
       slide.sortByPlayOrder(settings.playOrder);
       slide.goToVideo(0);
@@ -1229,9 +1234,12 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
   }
 
   /// 共享文件夹条目：离线时整体灰显，仅显示重连与移除
+  ///
+  /// 是否可播放既要求设备在线，也要求远端仍在共享该文件夹：远端切换媒体库后，
+  /// 原库中的文件夹会从远端的共享列表消失，此时按离线处理。
   Widget _buildSharedFolderTile(SharedFolderRef ref, LanProvider lan) {
     final loc = AppLocalizations.of(context);
-    final online = lan.isDeviceReachable(ref.deviceId);
+    final online = lan.isSharedFolderReachable(ref);
     final device = lan.deviceById(ref.deviceId);
     final deviceName = device?.name ?? ref.deviceName;
     final address = device?.address ?? ref.address;
@@ -1516,8 +1524,8 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
           // 每收集到10个新视频就更新一次列表（播放中）
           if (hasStartedPlaying &&
               uniqueVideos.length - lastUpdateCount >= 10) {
-            final newVideos = uniqueVideos.values.toList()
-              ..sort((a, b) => compareFileNames(a.name, b.name));
+            final newVideos = uniqueVideos.values.toList();
+            sortByFileName(newVideos, (video) => video.name);
             slideProvider.setVideos(newVideos);
             lastUpdateCount = uniqueVideos.length;
           }
@@ -1549,8 +1557,8 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
       }
 
       // 按文件名排序
-      final sortedVideos = uniqueVideos.values.toList()
-        ..sort((a, b) => compareFileNames(a.name, b.name));
+      final sortedVideos = uniqueVideos.values.toList();
+      sortByFileName(sortedVideos, (video) => video.name);
 
       if (sortedVideos.isEmpty) {
         if (!mounted) return;
@@ -1616,8 +1624,8 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
     SettingsProvider settingsProvider,
   ) async {
     // 对已收集的视频进行排序
-    final sortedVideos = videos.toList()
-      ..sort((a, b) => compareFileNames(a.name, b.name));
+    final sortedVideos = videos.toList();
+    sortByFileName(sortedVideos, (video) => video.name);
 
     slideProvider.setVideos(sortedVideos);
     settingsProvider.setLastFolderPaths(slideProvider.folderPaths);
@@ -1747,7 +1755,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
     final lan = Provider.of<LanProvider>(context, listen: false);
     final offline = [
       for (final ref in settings.activeLibrarySharedFolders)
-        if (!lan.isDeviceReachable(ref.deviceId)) ref,
+        if (!lan.isSharedFolderReachable(ref)) ref,
     ];
     if (offline.isEmpty) {
       _reconnectAttempt = 0;
@@ -1862,7 +1870,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
               final sharedRefs = settingsProvider.activeLibrarySharedFolders;
               final excludedGroups = _buildExcludedGroups(settingsProvider);
               final anySharedOffline = sharedRefs.any(
-                (ref) => !lanProvider.isDeviceReachable(ref.deviceId),
+                (ref) => !lanProvider.isSharedFolderReachable(ref),
               );
               return Padding(
                 padding: EdgeInsets.symmetric(

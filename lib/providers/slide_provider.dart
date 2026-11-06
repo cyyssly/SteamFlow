@@ -392,14 +392,22 @@ class SlideProvider extends ChangeNotifier {
 
   /// 根据播放顺序模式对视频列表进行排序
   void sortByPlayOrder(PlayOrder order) {
+    _sortVideos(order);
+    _currentIndex = 0;
+    _randomOrder = List.generate(_videos.length, (i) => i)..shuffle();
+    notifyListeners();
+  }
+
+  /// 就地按 [order] 排序，不重置当前索引、不发送通知
+  void _sortVideos(PlayOrder order) {
     switch (order) {
       case PlayOrder.sequential:
         // 按文件名排序（默认）——中文拼音 + 自然排序
-        _videos.sort((a, b) => compareFileNames(a.name, b.name));
+        sortByFileName(_videos, (video) => video.name);
         break;
       case PlayOrder.reverseSequential:
         // 按文件名逆序
-        _videos.sort((a, b) => compareFileNames(b.name, a.name));
+        sortByFileName(_videos, (video) => video.name, descending: true);
         break;
       case PlayOrder.newestFirst:
         // 按修改时间从新到旧
@@ -428,10 +436,31 @@ class SlideProvider extends ChangeNotifier {
         applyNewPreferredOrder(_videos);
         break;
     }
-    _currentIndex = 0;
+  }
+
+  /// 用新列表替换播放列表，保持 [videoPath] 仍为当前视频，并按 [order] 排序。
+  ///
+  /// 仅供「扫描补全列表」使用：整个过程只通知一次。若先 [setVideos]
+  /// （会把当前索引重置为 0）再 [goToVideo]，播放页会先收到一次
+  /// 「切到第 0 个视频」的通知，表现为先闪一下别的视频再切回目标。
+  void replaceVideosKeeping(
+    String videoPath,
+    List<VideoItem> videos,
+    PlayOrder order,
+  ) {
+    _videos = videos;
+    _followListOrder = false;
+    _sortVideos(order);
     _randomOrder = List.generate(_videos.length, (i) => i)..shuffle();
+    var index = _videos.indexWhere((v) => _pathEquals(v.path, videoPath));
+    if (index < 0) index = _videos.indexWhere((v) => v.path == videoPath);
+    _currentIndex = index >= 0 ? index : 0;
     notifyListeners();
   }
+
+  /// Windows 路径大小写不敏感
+  static bool _pathEquals(String a, String b) =>
+      Platform.isWindows ? a.toLowerCase() == b.toLowerCase() : a == b;
 
   /// 新视频优先排序：先按修改时间从新到旧，再做加权随机重排，
   /// 越新的视频偏移范围越小，因此更大概率保留在靠前位置。

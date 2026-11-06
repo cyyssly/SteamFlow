@@ -180,7 +180,8 @@ foreach (\$p in \$paths) {
       return result.exitCode == 0;
     } catch (e) {
       debugPrint('[MediaStoreService] deleteToTrashWindows failed: $e');
-      return _deleteFilesDirectly(paths);
+      // 回收站删除失败时不退回永久删除，避免误删用户文件
+      return false;
     }
   }
 

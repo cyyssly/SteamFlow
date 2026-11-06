@@ -16,6 +16,7 @@ import 'package:steam_flow/l10n/app_localizations.dart';
 import 'package:steam_flow/services/desktop_tray_service.dart';
 import 'package:steam_flow/services/fullscreen_service.dart';
 import 'package:steam_flow/services/lan_client_service.dart';
+import 'package:steam_flow/services/media_store_service.dart';
 import 'package:steam_flow/services/playback_progress_service.dart';
 import 'package:steam_flow/services/remote_copy_service.dart';
 import 'package:steam_flow/services/subtitle_style_service.dart';
@@ -273,6 +274,13 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _wasPlayingBeforeDelete = false;
   bool _showDeleteMessage = false;
   String _deleteMessageText = '';
+
+  /// 删除确认对话框是否已打开。
+  ///
+  /// 对话框打开期间播放页的全局键盘监听依然生效，方向键会被播放页截获去
+  /// 切换视频，而不是在「取消 / 确定」之间移动焦点。这里用标记把按键交还给
+  /// 对话框，并阻止所有切换入口。
+  bool _isDeleteDialogOpen = false;
   double _autoRotation = 0.0;
 
   /// 文件大小缓存的加载中标记（防止重复请求）
@@ -850,6 +858,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         ? AppLocalizations.of(context).excludeFromPlay
         : AppLocalizations.of(context).deleteFromDisk;
 
+    _isDeleteDialogOpen = true;
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -884,7 +893,9 @@ class _PlayerScreenState extends State<PlayerScreen>
           ),
         ],
       ),
-    );
+    ).whenComplete(() {
+      _isDeleteDialogOpen = false;
+    });
   }
 
   /// 显示删除通知（自定义覆盖层，在全屏模式下也能显示）
@@ -1002,6 +1013,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       // 通知远端瀑布流：返回时立即隐藏该条目，避免整页重载
       lan.markRemoteExcluded(device.id, remoteId);
 
+      // 移除后队列顺延到下一个视频，先重置缩放避免沿用放大状态
+      _resetZoom();
       slideProvider.removeVideo(currentIndex);
       if (slideProvider.videos.isEmpty) {
         // 列表清空后直接返回：先停播放，避免返回过程中原视频还在出声
@@ -1014,10 +1027,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
 
     if (action == DeleteAction.delete) {
-      // 实际删除文件
-      try {
-        await File(currentVideo.path).delete();
-      } catch (e) {
+      // 实际删除文件：进入系统回收站，失败时不退回永久删除
+      final deleted = await MediaStoreService.deleteToTrash([currentVideo.path]);
+      if (!deleted) {
         // 文件删除失败，可能是文件被占用（使用自定义覆盖层，在全屏模式下也能显示）
         if (mounted) {
           _showDeleteNotification(AppLocalizations.of(context).deleteFailed);
@@ -1028,6 +1040,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       // 排除播放：记录到已排除列表，供"选择文件夹"页面的"已排除的文件"使用
       settings.addExcludedPath(currentVideo.path);
     }
+
+    // 删除当前视频后队列会顺延到下一个视频：先重置缩放，
+    // 避免新视频沿用上一个视频的放大/位移状态
+    _resetZoom();
 
     // 从播放列表中移除
     slideProvider.removeVideo(currentIndex);
@@ -1058,6 +1074,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// [trigger] 决定换片动画：滚轮/手势等手动切换用上下滑动，
   /// 工具栏按钮与方向键用左右滑动，播放结束自动切换用淡入淡出。
   void _nextVideo({_TransitionTrigger trigger = _TransitionTrigger.vertical}) {
+    // 删除确认对话框打开时任何操作都不能切换当前视频
+    if (_isDeleteDialogOpen) return;
     _pendingTransition = trigger;
     _pendingDirection = 1;
     final slideProvider = Provider.of<SlideProvider>(context, listen: false);
@@ -1079,6 +1097,8 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   /// 切换到上一个视频（动画规则同 [_nextVideo]）。
   void _prevVideo({_TransitionTrigger trigger = _TransitionTrigger.vertical}) {
+    // 删除确认对话框打开时任何操作都不能切换当前视频
+    if (_isDeleteDialogOpen) return;
     _pendingTransition = trigger;
     _pendingDirection = -1;
     final settings = Provider.of<SettingsProvider>(context, listen: false);
@@ -1806,8 +1826,25 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   bool _hardwareKeyHandler(KeyEvent event) {
+    // 删除确认对话框打开时把按键全部交还对话框（方向键用于移动焦点，
+    // Enter 确认，Esc 取消），避免误切换当前视频
+    if (_isDeleteDialogOpen) return false;
+
+    final key = event.logicalKey;
+    // 按住 ↑/↓ 时系统会持续派发 KeyRepeatEvent：连续放大 / 缩小
+    if (event is KeyRepeatEvent) {
+      if (key == LogicalKeyboardKey.arrowUp) {
+        _zoomAt(_viewportCenter, _zoomStep);
+        return true;
+      }
+      if (key == LogicalKeyboardKey.arrowDown) {
+        _zoomAt(_viewportCenter, 1 / _zoomStep);
+        return true;
+      }
+      return false;
+    }
+
     if (event is KeyDownEvent) {
-      final key = event.logicalKey;
       // Ctrl 组合键缩放：Ctrl + = / Ctrl + - / Ctrl + 0
       if (HardwareKeyboard.instance.isControlPressed) {
         if (key == LogicalKeyboardKey.equal ||
