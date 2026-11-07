@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:steam_flow/models/video_item.dart';
 import 'package:steam_flow/providers/slide_provider.dart';
@@ -25,15 +27,47 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   bool _isAutoScanning = false;
 
+  /// 当前扫描的中止标记：播放页在扫描结束前被关闭时置为已中止
+  _ScanToken? _scanToken;
+
   @override
   void initState() {
     super.initState();
+    HardwareKeyboard.instance.addHandler(_hardwareKeyHandler);
     if (widget.initialVideoPath != null) {
       // 从右键菜单打开：跳过自动扫描，直接播放该视频
       WidgetsBinding.instance.addPostFrameCallback((_) => _openInitialVideo());
     } else {
-      _autoPlayOnStartup();
+      // 首帧之后再读本地化文案并开始自动播放
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _autoPlayOnStartup();
+      });
     }
+  }
+
+  @override
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_hardwareKeyHandler);
+    _scanToken?.aborted = true;
+    super.dispose();
+  }
+
+  /// 键盘快捷键：Enter 等同于点击「开始播放」。
+  ///
+  /// [HardwareKeyboard] 会无条件调用所有已注册的 handler，因此这里必须确认
+  /// 本页位于最上层，避免在播放页内按 Enter 又触发一次播放。
+  bool _hardwareKeyHandler(KeyEvent event) {
+    if (event is! KeyDownEvent) return false;
+    if (ModalRoute.of(context)?.isCurrent != true) return false;
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter) {
+      // 扫描进行中忽略重复触发（连按 Enter / 连续点击）
+      if (_isAutoScanning) return true;
+      _startPlayback();
+      return true;
+    }
+    return false;
   }
 
   /// 从右键菜单/命令行参数打开视频：扫描同目录、排序，从入口视频开始播放。
@@ -53,6 +87,28 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  /// 进入播放页并等待其关闭；关闭后把本次扫描标记为已中止。
+  Future<void> _enterPlayerAndWatchClose(_ScanToken token) async {
+    try {
+      await Navigator.pushNamed(context, '/player');
+    } finally {
+      token.aborted = true;
+      // 播放页关闭即中止扫描，并立即收起播放页中央的扫描提示；
+      // 扫描流程的 finally 会因 token 已中止而跳过清理。
+      if (identical(_scanToken, token)) {
+        if (!mounted) {
+          _isAutoScanning = false;
+        } else {
+          Provider.of<SlideProvider>(
+            context,
+            listen: false,
+          ).setScanning(false);
+          setState(() => _isAutoScanning = false);
+        }
+      }
+    }
+  }
+
   Future<void> _autoPlayOnStartup() async {
     final slideProvider = Provider.of<SlideProvider>(context, listen: false);
     final settingsProvider = Provider.of<SettingsProvider>(
@@ -65,9 +121,22 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    // 未开启自动播放时不做任何扫描，停留在主界面
+    if (!settingsProvider.autoPlay) {
+      return;
+    }
+
+    final loc = AppLocalizations.of(context);
     setState(() {
       _isAutoScanning = true;
     });
+
+    // 立即进入播放页：扫描在后台进行，提示显示在播放页中央。
+    // 清空上一次的播放列表，避免播放页先用旧视频显示/播放。
+    slideProvider.setVideos(const []);
+    slideProvider.setScanning(true, statusText: loc.scanning);
+    final token = _scanToken = _ScanToken();
+    unawaited(_enterPlayerAndWatchClose(token));
 
     try {
       // 使用 Map 进行去重
@@ -80,6 +149,7 @@ class _HomeScreenState extends State<HomeScreen> {
       // 逐个扫描文件夹
       for (final folderPath in slideProvider.folderPaths) {
         final videos = await _scanFolder(folderPath, settingsProvider);
+        if (token.aborted) return;
         for (final video in videos) {
           if (!uniqueVideos.containsKey(video.path)) {
             uniqueVideos[video.path] = video;
@@ -109,29 +179,24 @@ class _HomeScreenState extends State<HomeScreen> {
         }
 
         // 随机模式：收集到>=10个且未开始播放 → 提前开始（仅随机模式）
-        if (isRandomMode &&
-            settingsProvider.autoPlay &&
-            !hasStartedPlaying &&
-            uniqueVideos.length >= 10) {
+        if (isRandomMode && !hasStartedPlaying && uniqueVideos.length >= 10) {
           await _startPlaybackEarly(
             uniqueVideos.values.toList(),
             slideProvider,
             settingsProvider,
+            token,
           );
           hasStartedPlaying = true;
         }
       }
 
+      if (token.aborted) return;
+
       // 所有文件夹扫描完毕
       final allVideos = uniqueVideos.values.toList();
       sortByFileName(allVideos, (video) => video.name);
 
-      if (allVideos.isEmpty) {
-        setState(() {
-          _isAutoScanning = false;
-        });
-        return;
-      }
+      if (allVideos.isEmpty) return;
 
       if (hasStartedPlaying) {
         // 随机模式已提前播放：增量添加剩余新视频
@@ -144,24 +209,20 @@ class _HomeScreenState extends State<HomeScreen> {
         );
         slideProvider.sortByPlayOrder(settingsProvider.playOrder);
 
-        if (settingsProvider.autoPlay) {
-          await Future.delayed(const Duration(milliseconds: 500));
-
-          if (!mounted) return;
-          slideProvider.goToStartPosition(settingsProvider.playOrder);
-          slideProvider.startPlay();
-          if (mounted) {
-            Navigator.pushNamed(context, '/player');
-          }
-        }
+        slideProvider.goToStartPosition(settingsProvider.playOrder);
+        slideProvider.startPlay();
       }
     } catch (e) {
       debugPrint('自动扫描失败: $e');
     } finally {
-      if (mounted) {
-        setState(() {
-          _isAutoScanning = false;
-        });
+      // 扫描被中止时状态已由 _enterPlayerAndWatchClose 重置，这里跳过
+      if (!token.aborted) {
+        slideProvider.setScanning(false);
+        if (mounted) {
+          setState(() {
+            _isAutoScanning = false;
+          });
+        }
       }
     }
   }
@@ -170,6 +231,7 @@ class _HomeScreenState extends State<HomeScreen> {
     List<VideoItem> videos,
     SlideProvider slideProvider,
     SettingsProvider settingsProvider,
+    _ScanToken token,
   ) async {
     // 对已收集的视频进行排序
     final sortedVideos = videos.toList();
@@ -183,12 +245,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
     await Future.delayed(const Duration(milliseconds: 300));
 
-    if (!mounted) return;
+    // 扫描已被中止（用户退出了播放页）时不再开始播放
+    if (!mounted || token.aborted) return;
     slideProvider.goToStartPosition(settingsProvider.playOrder);
     slideProvider.startPlay();
-    if (mounted) {
-      Navigator.pushNamed(context, '/player');
-    }
   }
 
   Future<List<VideoItem>> _scanFolder(
@@ -197,6 +257,9 @@ class _HomeScreenState extends State<HomeScreen> {
   ) => VideoScanService.scanFolder(folderPath, settings);
 
   Future<void> _startPlayback() async {
+    // 扫描进行中（含启动自动播放的扫描）忽略重复触发：
+    // 否则连点会重复打开播放页、重复扫描
+    if (_isAutoScanning) return;
     final slideProvider = Provider.of<SlideProvider>(context, listen: false);
     final settingsProvider = Provider.of<SettingsProvider>(
       context,
@@ -214,10 +277,16 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    // 总是重新扫描所有文件夹，确保获取完整的视频列表
-    setState(() {
-      _isAutoScanning = true;
-    });
+    final loc = AppLocalizations.of(context);
+    _isAutoScanning = true;
+
+    // 点击播放立即进入播放页：扫描在后台进行，播放页中央显示扫描提示。
+    // 清空上一次的播放列表，避免播放页先用旧视频显示/播放。
+    slideProvider.stopPlay();
+    slideProvider.setVideos(const []);
+    slideProvider.setScanning(true, statusText: loc.scanning);
+    final token = _scanToken = _ScanToken();
+    unawaited(_enterPlayerAndWatchClose(token));
 
     try {
       // 使用 Map 进行去重
@@ -226,6 +295,8 @@ class _HomeScreenState extends State<HomeScreen> {
       // 逐个扫描文件夹
       for (final folderPath in slideProvider.folderPaths) {
         final videos = await _scanFolder(folderPath, settingsProvider);
+        // 扫描途中已退出播放页：不再写入结果
+        if (token.aborted) return;
         for (final video in videos) {
           if (!uniqueVideos.containsKey(video.path)) {
             uniqueVideos[video.path] = video;
@@ -233,23 +304,17 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
 
+      if (!mounted || token.aborted) return;
+
       // 按文件名排序
       final sortedVideos = uniqueVideos.values.toList();
       sortByFileName(sortedVideos, (video) => video.name);
 
       if (sortedVideos.isEmpty) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(AppLocalizations.of(context).msgReselectFolder),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
-          ),
-        );
+        _leavePlayerAndWarn(loc.msgReselectFolder);
         return;
       }
 
-      if (!mounted) return;
       slideProvider.setVideos(
         sortedVideos,
         playOrder: settingsProvider.playOrder,
@@ -258,26 +323,36 @@ class _HomeScreenState extends State<HomeScreen> {
 
       slideProvider.goToStartPosition(settingsProvider.playOrder);
       slideProvider.startPlay();
-      if (mounted) {
-        Navigator.pushNamed(context, '/player');
-      }
     } catch (e) {
       debugPrint('扫描视频失败: $e');
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(AppLocalizations.of(context).msgScanError),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 3),
-        ),
-      );
+      _leavePlayerAndWarn(AppLocalizations.of(context).msgScanError);
     } finally {
-      if (mounted) {
-        setState(() {
-          _isAutoScanning = false;
-        });
+      // 扫描被中止时状态已由 _enterPlayerAndWatchClose 重置，这里跳过
+      if (!token.aborted) {
+        slideProvider.setScanning(false);
+        if (mounted) {
+          setState(() {
+            _isAutoScanning = false;
+          });
+        }
       }
     }
+  }
+
+  /// 扫描没有得到可播放的视频时，先退回本页再提示，
+  /// 避免提示被刚刚打开的播放页遮挡。
+  void _leavePlayerAndWarn(String message) {
+    if (!mounted) return;
+    final navigator = Navigator.of(context);
+    if (navigator.canPop()) navigator.pop();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.red,
+        duration: const Duration(seconds: 3),
+      ),
+    );
   }
 
   void _selectFolder(BuildContext context) {
@@ -302,239 +377,235 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            if (_isAutoScanning) ...[
-              const CircularProgressIndicator(),
-              const SizedBox(height: 16),
-              Text(
-                AppLocalizations.of(context).scanning,
-                style: const TextStyle(fontSize: 16, color: Colors.grey),
-              ),
-            ] else ...[
-              SizedBox(
-                width: MediaQuery.of(context).size.width * 0.5,
-                child: ElevatedButton(
-                  onPressed: () => _startPlayback(),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF00b894),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 16,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    elevation: 4,
-                    shadowColor: const Color(0xFF00b894).withValues(alpha: 0.4),
+            SizedBox(
+              width: MediaQuery.of(context).size.width * 0.5,
+              child: ElevatedButton(
+                onPressed: () => _startPlayback(),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF00b894),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 16,
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.play_circle, size: 24),
-                      const SizedBox(width: 12),
-                      Flexible(
-                        child: Text(
-                          AppLocalizations.of(context).startPlay,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 18),
-                        ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  elevation: 4,
+                  shadowColor: const Color(0xFF00b894).withValues(alpha: 0.4),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.play_circle, size: 24),
+                    const SizedBox(width: 12),
+                    Flexible(
+                      child: Text(
+                        AppLocalizations.of(context).startPlay,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 18),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 12),
-              SizedBox(
-                width: MediaQuery.of(context).size.width * 0.5,
-                child: isAndroid
-                    ? ElevatedButton(
-                        onPressed: () => _selectFolder(context),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF0984e3),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 20,
-                            vertical: 16,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          elevation: 3,
-                          shadowColor: const Color(
-                            0xFF0984e3,
-                          ).withValues(alpha: 0.3),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: MediaQuery.of(context).size.width * 0.5,
+              child: isAndroid
+                  ? ElevatedButton(
+                      onPressed: () => _selectFolder(context),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF0984e3),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 16,
                         ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.video_library, size: 24),
-                            const SizedBox(width: 12),
-                            Flexible(
-                              child: Text(
-                                AppLocalizations.of(context).selectVideos,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontSize: 18),
-                              ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        elevation: 3,
+                        shadowColor: const Color(
+                          0xFF0984e3,
+                        ).withValues(alpha: 0.3),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.video_library, size: 24),
+                          const SizedBox(width: 12),
+                          Flexible(
+                            child: Text(
+                              AppLocalizations.of(context).selectVideos,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 18),
                             ),
-                          ],
-                        ),
-                      )
-                    : ElevatedButton(
-                        onPressed: () => _selectFolder(context),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF0984e3),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 20,
-                            vertical: 16,
                           ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          elevation: 3,
-                          shadowColor: const Color(
-                            0xFF0984e3,
-                          ).withValues(alpha: 0.3),
+                        ],
+                      ),
+                    )
+                  : ElevatedButton(
+                      onPressed: () => _selectFolder(context),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF0984e3),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 16,
                         ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.folder_open, size: 24),
-                            const SizedBox(width: 12),
-                            Flexible(
-                              child: Text(
-                                AppLocalizations.of(context).selectVideos,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontSize: 18),
-                              ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        elevation: 3,
+                        shadowColor: const Color(
+                          0xFF0984e3,
+                        ).withValues(alpha: 0.3),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.folder_open, size: 24),
+                          const SizedBox(width: 12),
+                          Flexible(
+                            child: Text(
+                              AppLocalizations.of(context).selectVideos,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 18),
                             ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
-              ),
-              const SizedBox(height: 12),
-              SizedBox(
-                width: MediaQuery.of(context).size.width * 0.5,
-                child: ElevatedButton(
-                  onPressed: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const LanDevicesScreen()),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF00b894),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 16,
                     ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    elevation: 3,
-                    shadowColor: const Color(0xFF00b894).withValues(alpha: 0.3),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: MediaQuery.of(context).size.width * 0.5,
+              child: ElevatedButton(
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const LanDevicesScreen()),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF00b894),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 16,
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.lan_outlined, size: 24),
-                      const SizedBox(width: 12),
-                      Flexible(
-                        child: Text(
-                          AppLocalizations.of(context).lanSharePageTitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 18),
-                        ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  elevation: 3,
+                  shadowColor: const Color(0xFF00b894).withValues(alpha: 0.3),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.lan_outlined, size: 24),
+                    const SizedBox(width: 12),
+                    Flexible(
+                      child: Text(
+                        AppLocalizations.of(context).lanSharePageTitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 18),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 12),
-              SizedBox(
-                width: MediaQuery.of(context).size.width * 0.5,
-                child: ElevatedButton(
-                  onPressed: () => Navigator.pushNamed(context, '/settings'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF6c5ce7),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 16,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    elevation: 3,
-                    shadowColor: const Color(0xFF6c5ce7).withValues(alpha: 0.3),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: MediaQuery.of(context).size.width * 0.5,
+              child: ElevatedButton(
+                onPressed: () => Navigator.pushNamed(context, '/settings'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF6c5ce7),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 16,
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.settings, size: 24),
-                      const SizedBox(width: 12),
-                      Flexible(
-                        child: Text(
-                          AppLocalizations.of(context).settings,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 18),
-                        ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  elevation: 3,
+                  shadowColor: const Color(0xFF6c5ce7).withValues(alpha: 0.3),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.settings, size: 24),
+                    const SizedBox(width: 12),
+                    Flexible(
+                      child: Text(
+                        AppLocalizations.of(context).settings,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 18),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 12),
-              SizedBox(
-                width: MediaQuery.of(context).size.width * 0.5,
-                child: ElevatedButton(
-                  onPressed: () => Navigator.pushNamed(context, '/help'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFe17055),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 16,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    elevation: 3,
-                    shadowColor: const Color(0xFFe17055).withValues(alpha: 0.3),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: MediaQuery.of(context).size.width * 0.5,
+              child: ElevatedButton(
+                onPressed: () => Navigator.pushNamed(context, '/help'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFe17055),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 16,
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.help_outline, size: 24),
-                      const SizedBox(width: 12),
-                      Flexible(
-                        child: Text(
-                          AppLocalizations.of(context).help,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 18),
-                        ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  elevation: 3,
+                  shadowColor: const Color(0xFFe17055).withValues(alpha: 0.3),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.help_outline, size: 24),
+                    const SizedBox(width: 12),
+                    Flexible(
+                      child: Text(
+                        AppLocalizations.of(context).help,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 18),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 24),
-              Text(
-                appVersionLabel,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.white.withValues(alpha: 0.3),
-                ),
+            ),
+            const SizedBox(height: 24),
+            Text(
+              appVersionLabel,
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.white.withValues(alpha: 0.3),
               ),
-            ],
+            ),
           ],
         ),
       ),
     );
   }
+}
+
+/// 一次「扫描并播放」流程的中止标记。
+class _ScanToken {
+  bool aborted = false;
 }

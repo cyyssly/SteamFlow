@@ -2443,9 +2443,44 @@ class _PlayerScreenState extends State<PlayerScreen>
           _applySettingsToPlayback(settings);
 
           if (slideProvider.videos.isEmpty) {
+            final loc = AppLocalizations.of(context);
+            final scanning = slideProvider.isScanning;
             return Scaffold(
               backgroundColor: Colors.black,
-              body: Center(child: Text(AppLocalizations.of(context).noVideos)),
+              body: Center(
+                child: scanning
+                    ? Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                              color: Colors.white70,
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          Text(
+                            slideProvider.scanStatusText.isEmpty
+                                ? loc.scanning
+                                : slideProvider.scanStatusText,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              color: Colors.white70,
+                            ),
+                          ),
+                        ],
+                      )
+                    : Text(
+                        loc.noVideos,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Colors.white70,
+                        ),
+                      ),
+              ),
             );
           }
 

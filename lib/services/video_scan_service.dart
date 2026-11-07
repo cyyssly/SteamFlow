@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:steam_flow/models/video_item.dart';
 import 'package:steam_flow/providers/settings_provider.dart';
 import 'package:steam_flow/services/media_store_service.dart';
@@ -39,45 +40,18 @@ class VideoScanService {
           .toList();
     }
 
-    // 桌面端使用文件系统 API
-    List<File> files = [];
-    final dir = Directory(folderPath);
+    // 桌面端使用文件系统 API。
+    // 大文件夹里逐个统计文件大小/修改时间会长时间占用主 isolate，
+    // 导致扫描提示卡住、界面掉帧；放到后台 isolate 执行。
     final recursive = recursiveOverride ?? settings.recursiveScan;
-    if (recursive) {
-      await for (var entity in dir.list(recursive: true)) {
-        if (entity is File) {
-          files.add(entity);
-        }
-      }
-    } else {
-      final entities = await dir.list().toList();
-      files = entities.whereType<File>().toList();
-    }
-
-    final items = <VideoItem>[];
-    for (final file in files) {
-      if (!isSupportedVideoPath(file.path)) continue;
-      // 文件大小与修改时间在此读入，避免瀑布流卡片在 build 里同步读盘。
-      // 分辨率此处未知（无法从文件头解析），由后续取帧时（[readSizes]）补齐。
-      DateTime? modifiedTime;
-      int? sizeBytes;
-      try {
-        final stat = await file.stat();
-        modifiedTime = stat.modified;
-        sizeBytes = stat.size;
-      } catch (_) {
-        // 文件被占用/权限不足时忽略，对应信息显示为「未知」
-      }
-      items.add(
-        VideoItem(
-          name: file.path.split(Platform.pathSeparator).last,
-          path: file.path,
-          modifiedTime: modifiedTime,
-          sizeBytes: sizeBytes,
-        ),
-      );
-    }
-    return items.where(notExcluded).toList();
+    return compute(
+      _scanFolderSync,
+      _ScanFolderRequest(
+        folderPath: folderPath,
+        recursive: recursive,
+        excluded: settings.excludedPaths.toList(),
+      ),
+    );
   }
 
   /// 批量读取视频宽高比（宽/高），无法取帧的项为 null。
@@ -96,4 +70,60 @@ class VideoScanService {
   /// 批量读取视频的宽高比与真实分辨率（同时把缩略图填入缓存）。
   static Future<List<VideoFrameInfo>> readSizes(List<String> paths) =>
       VideoThumbnailService.readSizes(paths);
+}
+
+/// 后台 isolate 的扫描参数（字段必须是可跨 isolate 传递的类型）
+class _ScanFolderRequest {
+  final String folderPath;
+  final bool recursive;
+  final List<String> excluded;
+
+  const _ScanFolderRequest({
+    required this.folderPath,
+    required this.recursive,
+    required this.excluded,
+  });
+}
+
+/// 在后台 isolate 中同步扫描文件夹，避免主 isolate 被大量文件系统调用阻塞。
+List<VideoItem> _scanFolderSync(_ScanFolderRequest request) {
+  final excluded = {
+    for (final path in request.excluded)
+      Platform.isWindows ? path.toLowerCase() : path,
+  };
+  bool notExcluded(VideoItem item) => !excluded.contains(
+    Platform.isWindows ? item.path.toLowerCase() : item.path,
+  );
+
+  final dir = Directory(request.folderPath);
+  final entities = request.recursive
+      ? dir.listSync(recursive: true)
+      : dir.listSync();
+  final items = <VideoItem>[];
+
+  for (final entity in entities) {
+    if (entity is! File) continue;
+    if (!isSupportedVideoPath(entity.path)) continue;
+    // 文件大小与修改时间在此读入，避免瀑布流卡片在 build 里同步读盘。
+    // 分辨率此处未知（无法从文件头解析），由后续取帧时（[readSizes]）补齐。
+    DateTime? modifiedTime;
+    int? sizeBytes;
+    try {
+      final stat = entity.statSync();
+      modifiedTime = stat.modified;
+      sizeBytes = stat.size;
+    } catch (_) {
+      // 文件被占用/权限不足时忽略，对应信息显示为「未知」
+    }
+    final item = VideoItem(
+      name: entity.path.split(Platform.pathSeparator).last,
+      path: entity.path,
+      modifiedTime: modifiedTime,
+      sizeBytes: sizeBytes,
+    );
+    if (!notExcluded(item)) continue;
+    items.add(item);
+  }
+
+  return items;
 }

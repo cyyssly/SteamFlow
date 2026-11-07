@@ -119,6 +119,11 @@ class AppLocalizations {
   String get selectVideos => _t('选择视频', 'Videos', '選擇視頻');
   String get settings => _t('设置', 'Settings', '設置');
   String get scanning => _t('正在扫描视频...', 'Scanning...', '正在掃描視頻...');
+  String readingSharedFolder(String name) => _t(
+    '正在读取共享文件夹「$name」...',
+    'Reading shared folder "$name"...',
+    '正在讀取共享文件夾「$name」...',
+  );
 
   // 相册选择页
   String get selectAlbumTitle => _t('选择相册', 'Albums', '選擇相冊');

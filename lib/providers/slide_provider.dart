@@ -12,12 +12,31 @@ class SlideProvider extends ChangeNotifier {
   bool _isPlaying = false;
   List<String> _folderPaths = [];
 
+  /// 是否正在扫描播放列表（播放页据此显示扫描提示）
+  bool _isScanning = false;
+  String _scanStatusText = '';
+
   /// 是否按传入列表的既有顺序播放（从瀑布流进入时为其当前排序）
   bool _followListOrder = false;
 
   List<VideoItem> get videos => _videos;
   int get currentIndex => _currentIndex;
   bool get isPlaying => _isPlaying;
+
+  /// 是否正在扫描播放列表
+  bool get isScanning => _isScanning;
+
+  /// 扫描提示文案（扫描中为空则使用默认文案）
+  String get scanStatusText => _scanStatusText;
+
+  /// 更新扫描状态。播放页据此在列表为空时显示「正在扫描」而不是「没有视频」。
+  void setScanning(bool scanning, {String? statusText}) {
+    final nextText = scanning ? (statusText ?? _scanStatusText) : '';
+    if (_isScanning == scanning && _scanStatusText == nextText) return;
+    _isScanning = scanning;
+    _scanStatusText = nextText;
+    notifyListeners();
+  }
 
   /// 是否按传入列表的既有顺序播放
   bool get followListOrder => _followListOrder;

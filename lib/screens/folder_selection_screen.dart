@@ -50,6 +50,9 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
     with RouteAware {
   bool _isScanning = false;
 
+  /// 当前「扫描并播放」流程的中止标记：播放页提前关闭时置为已中止
+  _ScanToken? _scanToken;
+
   // 缓存每个文件夹的统计信息
   final Map<String, Map<String, int>> _folderStats = {};
   // 跟踪正在计数的文件夹
@@ -860,6 +863,8 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
   ///
   /// 移动端同名文件夹归并为一个条目，这里会合并所有路径的视频并去重。
   Future<void> _playFolderGroup(_LocalFolderGroup group) async {
+    // 任一扫描进行中时忽略重复触发，避免并发扫描 / 打开多个播放页
+    if (_isScanning) return;
     final groupKey = group.key;
     if (_playingFolders.contains(groupKey)) return;
     final slideProvider = Provider.of<SlideProvider>(context, listen: false);
@@ -872,23 +877,23 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
       _playingFolders.add(groupKey);
     });
 
+    // 点击播放立即进入播放页：扫描在后台进行，播放页中央显示扫描提示
+    final token = _beginPlaybackScan(
+      slideProvider,
+      AppLocalizations.of(context).scanning,
+    );
     try {
       final unique = <String, VideoItem>{};
       for (final path in group.paths) {
         for (final video in await _scanFolder(path, settingsProvider)) {
           unique.putIfAbsent(video.key, () => video);
         }
+        if (token.aborted) return;
       }
       final videos = unique.values.toList();
-      if (!mounted) return;
+      if (!mounted || token.aborted) return;
       if (videos.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(AppLocalizations.of(context).msgNoVideos),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
-          ),
-        );
+        _leavePlayerAndWarn(AppLocalizations.of(context).msgNoVideos);
         return;
       }
 
@@ -897,35 +902,42 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
       slideProvider.sortByPlayOrder(settingsProvider.playOrder);
       slideProvider.goToVideo(0);
       slideProvider.startPlay();
-
-      if (!mounted) return;
-      Navigator.pushNamed(context, '/player');
     } finally {
       if (mounted) {
         setState(() {
           _playingFolders.remove(groupKey);
         });
       }
+      if (!token.aborted) _finishScan(slideProvider);
     }
   }
 
   /// 直接播放某个共享文件夹：范围限定为该远端文件夹
   Future<void> _playSharedFolder(SharedFolderRef ref) async {
-    if (_playingShared.contains(ref.key)) return;
+    // 任一扫描进行中时忽略重复触发，避免并发读取 / 打开多个播放页
+    if (_isScanning) return;
+    if (!_playingShared.add(ref.key)) return;
+    setState(() {});
     final lan = Provider.of<LanProvider>(context, listen: false);
     final settings = Provider.of<SettingsProvider>(context, listen: false);
     final slide = Provider.of<SlideProvider>(context, listen: false);
 
-    setState(() => _playingShared.add(ref.key));
+    // 点击播放立即进入播放页，读取进度显示在播放页中央
+    final token = _beginPlaybackScan(
+      slide,
+      AppLocalizations.of(context).readingSharedFolder(ref.folderName),
+    );
     try {
       final videos = await lan.loadSharedFolderVideos(ref);
-      if (!mounted) return;
-      if (videos == null || videos.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(AppLocalizations.of(context).lanLoadFailed),
-            backgroundColor: Colors.red,
-          ),
+      if (!mounted || token.aborted) return;
+      if (videos == null) {
+        _leavePlayerAndWarn(AppLocalizations.of(context).lanLoadFailed);
+        return;
+      }
+      if (videos.isEmpty) {
+        _leavePlayerAndWarn(
+          AppLocalizations.of(context).noVideosInFolder,
+          backgroundColor: Colors.orange,
         );
         return;
       }
@@ -933,11 +945,11 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
       slide.sortByPlayOrder(settings.playOrder);
       slide.goToVideo(0);
       slide.startPlay();
-      if (mounted) Navigator.pushNamed(context, '/player');
     } finally {
       if (mounted) {
         setState(() => _playingShared.remove(ref.key));
       }
+      if (!token.aborted) _finishScan(slide);
     }
   }
 
@@ -978,29 +990,32 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
     final settings = Provider.of<SettingsProvider>(context, listen: false);
     if (slide.folderPaths.isEmpty) return;
 
-    setState(() => _isScanning = true);
+    // 点击播放立即进入播放页：扫描在后台进行，播放页中央显示扫描提示
+    final token = _beginPlaybackScan(
+      slide,
+      AppLocalizations.of(context).scanning,
+    );
     try {
       final unique = <String, VideoItem>{};
       for (final path in slide.folderPaths) {
-        final videos = await _scanFolder(path, settings);
-        for (final video in videos) {
+        for (final video in await _scanFolder(path, settings)) {
           unique.putIfAbsent(video.key, () => video);
         }
+        if (token.aborted) return;
       }
-      if (!mounted) return;
+      if (!mounted || token.aborted) return;
       if (unique.isEmpty) {
-        _showSnack(AppLocalizations.of(context).msgNoVideos);
+        _leavePlayerAndWarn(AppLocalizations.of(context).msgNoVideos);
         return;
       }
       final videos = unique.values.toList();
       sortByFileName(videos, (video) => video.name);
       slide.setVideos(videos, playOrder: settings.playOrder);
       slide.sortByPlayOrder(settings.playOrder);
-      slide.goToVideo(0);
+      slide.goToStartPosition(settings.playOrder);
       slide.startPlay();
-      Navigator.pushNamed(context, '/player');
     } finally {
-      if (mounted) setState(() => _isScanning = false);
+      if (!token.aborted) _finishScan(slide);
     }
   }
 
@@ -1008,36 +1023,55 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
   Future<void> _playSharedSection() async {
     if (_isScanning) return;
     final settings = Provider.of<SettingsProvider>(context, listen: false);
-    final lan = Provider.of<LanProvider>(context, listen: false);
-    final slide = Provider.of<SlideProvider>(context, listen: false);
     final refs = settings.activeLibrarySharedFolders;
     if (refs.isEmpty) return;
+    await _playSharedFolders(refs);
+  }
 
-    setState(() => _isScanning = true);
+  Future<void> _playSharedFolders(List<SharedFolderRef> refs) async {
+    if (_isScanning || refs.isEmpty) return;
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
+    final lan = Provider.of<LanProvider>(context, listen: false);
+    final slide = Provider.of<SlideProvider>(context, listen: false);
+
+    // 点击播放立即进入播放页：读取进度显示在播放页中央
+    final token = _beginPlaybackScan(
+      slide,
+      AppLocalizations.of(context).scanning,
+    );
     try {
+      await lan.probeSharedDevices(refs);
+      if (token.aborted) return;
       final unique = <String, VideoItem>{};
       for (final ref in refs) {
+        if (!mounted || token.aborted) return;
         if (!lan.isSharedFolderReachable(ref)) continue;
+        slide.setScanning(
+          true,
+          statusText: AppLocalizations.of(
+            context,
+          ).readingSharedFolder(ref.folderName),
+        );
         final videos = await lan.loadSharedFolderVideos(ref);
+        if (token.aborted) return;
         if (videos == null) continue;
         for (final video in videos) {
           unique.putIfAbsent(video.key, () => video);
         }
       }
-      if (!mounted) return;
+      if (!mounted || token.aborted) return;
       if (unique.isEmpty) {
-        _showSnack(AppLocalizations.of(context).lanLoadFailed);
+        _leavePlayerAndWarn(AppLocalizations.of(context).lanLoadFailed);
         return;
       }
       final videos = unique.values.toList();
       sortByFileName(videos, (video) => video.name);
       slide.setVideos(videos, playOrder: settings.playOrder);
       slide.sortByPlayOrder(settings.playOrder);
-      slide.goToVideo(0);
+      slide.goToStartPosition(settings.playOrder);
       slide.startPlay();
-      Navigator.pushNamed(context, '/player');
     } finally {
-      if (mounted) setState(() => _isScanning = false);
+      if (!token.aborted) _finishScan(slide);
     }
   }
 
@@ -1486,18 +1520,21 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
   }
 
   Future<void> _scanVideos() async {
+    // 扫描进行中忽略重复触发（连按 Enter / 连续点击）
+    if (_isScanning) return;
     final slideProvider = Provider.of<SlideProvider>(context, listen: false);
     final settingsProvider = Provider.of<SettingsProvider>(
       context,
       listen: false,
     );
     final lanProvider = Provider.of<LanProvider>(context, listen: false);
+    final loc = AppLocalizations.of(context);
     final sharedRefs = settingsProvider.activeLibrarySharedFolders;
 
     if (slideProvider.folderPaths.isEmpty && sharedRefs.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(AppLocalizations.of(context).msgAddFolderFirst),
+          content: Text(loc.msgAddFolderFirst),
           backgroundColor: Colors.red,
           duration: const Duration(seconds: 3),
         ),
@@ -1505,138 +1542,136 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
       return;
     }
 
-    setState(() {
-      _isScanning = true;
-    });
+    // 点击播放立即进入播放页：扫描在后台进行，播放页中央显示扫描提示
+    final token = _beginPlaybackScan(slideProvider, loc.scanning);
 
     try {
       // 使用 Map 进行去重（本机用路径、远端用设备+文件夹+相对路径）
       final uniqueVideos = <String, VideoItem>{};
-      bool hasStartedPlaying = false;
-      int lastUpdateCount = 0;
-
-      Future<void> collect(List<VideoItem> videos) async {
-        for (final video in videos) {
-          if (!uniqueVideos.containsKey(video.key)) {
-            uniqueVideos[video.key] = video;
-          }
-
-          // 每收集到10个新视频就更新一次列表（播放中）
-          if (hasStartedPlaying &&
-              uniqueVideos.length - lastUpdateCount >= 10) {
-            final newVideos = uniqueVideos.values.toList();
-            sortByFileName(newVideos, (video) => video.name);
-            slideProvider.setVideos(newVideos);
-            lastUpdateCount = uniqueVideos.length;
-          }
-        }
-
-        // 如果已经收集到足够的视频且还未开始播放，则立即开始
-        if (!hasStartedPlaying && uniqueVideos.length >= 10) {
-          await _startPlaybackEarly(
-            uniqueVideos.values.toList(),
-            slideProvider,
-            settingsProvider,
-          );
-          hasStartedPlaying = true;
-          lastUpdateCount = uniqueVideos.length;
-        }
-      }
 
       // 逐个扫描本机文件夹
       for (final folderPath in slideProvider.folderPaths) {
         final videos = await _scanFolder(folderPath, settingsProvider);
-        await collect(videos);
+        if (token.aborted) return;
+        for (final video in videos) {
+          uniqueVideos.putIfAbsent(video.key, () => video);
+        }
       }
 
-      // 再拉取已添加的共享文件夹；离线或读取失败的直接跳过
-      for (final ref in sharedRefs) {
-        final videos = await lanProvider.loadSharedFolderVideos(ref);
-        if (videos == null) continue;
-        await collect(videos);
+      // 继续读取共享文件夹（离线设备自动跳过），并提示当前读取进度
+      if (sharedRefs.isNotEmpty) {
+        await lanProvider.probeSharedDevices(sharedRefs);
+        if (token.aborted) return;
+        for (final ref in sharedRefs) {
+          if (!mounted || token.aborted) return;
+          if (!lanProvider.isSharedFolderReachable(ref)) continue;
+          slideProvider.setScanning(
+            true,
+            statusText: loc.readingSharedFolder(ref.folderName),
+          );
+          final videos = await lanProvider.loadSharedFolderVideos(ref);
+          if (token.aborted) return;
+          if (videos == null) continue;
+          for (final video in videos) {
+            uniqueVideos.putIfAbsent(video.key, () => video);
+          }
+        }
+        if (!mounted || token.aborted) return;
+        slideProvider.setScanning(true, statusText: loc.scanning);
       }
 
-      // 按文件名排序
+      if (!mounted || token.aborted) return;
+
       final sortedVideos = uniqueVideos.values.toList();
       sortByFileName(sortedVideos, (video) => video.name);
 
       if (sortedVideos.isEmpty) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(AppLocalizations.of(context).msgNoVideos),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
-          ),
-        );
-        setState(() {
-          _isScanning = false;
-        });
+        _leavePlayerAndWarn(loc.msgNoVideos);
         return;
       }
 
-      if (!hasStartedPlaying) {
-        // 如果视频少于10个，直接设置并返回
-        slideProvider.setVideos(sortedVideos);
-        settingsProvider.setLastFolderPaths(slideProvider.folderPaths);
-
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              AppLocalizations.of(context).msgScanComplete(sortedVideos.length),
-            ),
-            backgroundColor: Colors.green,
-            duration: const Duration(seconds: 3),
-          ),
-        );
-
-        if (!mounted) return;
-        Navigator.pop(context);
-      } else {
-        // 已经在播放中，更新完整列表
-        if (sortedVideos.length != lastUpdateCount) {
-          slideProvider.setVideos(sortedVideos);
-          settingsProvider.setLastFolderPaths(slideProvider.folderPaths);
-        }
-      }
+      // 与主页「开始播放」一致：全量排序后一次写入，从头开始播放
+      slideProvider.setVideos(
+        sortedVideos,
+        playOrder: settingsProvider.playOrder,
+      );
+      slideProvider.sortByPlayOrder(settingsProvider.playOrder);
+      slideProvider.goToStartPosition(settingsProvider.playOrder);
+      slideProvider.startPlay();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(AppLocalizations.of(context).msgScanFailed(e)),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 3),
-        ),
-      );
+      _leavePlayerAndWarn(AppLocalizations.of(context).msgScanFailed(e));
     } finally {
-      if (mounted) {
-        setState(() {
-          _isScanning = false;
-        });
+      // 扫描被中止时状态已由 _abortScan 重置，这里跳过
+      if (!token.aborted) {
+        _finishScan(slideProvider);
       }
     }
   }
 
-  Future<void> _startPlaybackEarly(
-    List<VideoItem> videos,
-    SlideProvider slideProvider,
-    SettingsProvider settingsProvider,
-  ) async {
-    // 对已收集的视频进行排序
-    final sortedVideos = videos.toList();
-    sortByFileName(sortedVideos, (video) => video.name);
+  /// 开始一次「扫描后播放」。
+  ///
+  /// 点击播放后立即进入播放页：扫描在后台进行，扫描/读取提示显示在
+  /// 播放页中央。返回本次扫描的中止标记，供扫描流程检查是否已被中止。
+  _ScanToken _beginPlaybackScan(SlideProvider slide, String statusText) {
+    final token = _ScanToken();
+    _scanToken = token;
+    setState(() => _isScanning = true);
 
-    slideProvider.setVideos(sortedVideos);
-    settingsProvider.setLastFolderPaths(slideProvider.folderPaths);
+    // 清空上一次的播放列表，避免播放页先用旧视频显示/播放
+    slide.stopPlay();
+    slide.setVideos(const []);
+    slide.setScanning(true, statusText: statusText);
 
-    // 开始播放
-    slideProvider.goToVideo(0);
-    slideProvider.startPlay();
+    // 不等待：播放页关闭（ESC）时中止本次扫描
+    unawaited(
+      Navigator.pushNamed(
+        context,
+        '/player',
+      ).then((_) => _abortScan(slide, token)),
+    );
+    return token;
+  }
 
+  /// 播放页在扫描结束前被关闭：中止本次扫描，结果作废。
+  void _abortScan(SlideProvider slide, _ScanToken token) {
+    if (!identical(_scanToken, token)) return;
+    if (!_isScanning) return;
+    token.aborted = true;
+    slide.setScanning(false);
     if (mounted) {
-      Navigator.pushNamed(context, '/player');
+      setState(() => _isScanning = false);
+    } else {
+      _isScanning = false;
     }
+  }
+
+  /// 扫描正常结束（未被中止）时收尾：关闭扫描提示并解除按钮禁用。
+  void _finishScan(SlideProvider slide) {
+    slide.setScanning(false);
+    if (mounted) {
+      setState(() => _isScanning = false);
+    } else {
+      _isScanning = false;
+    }
+  }
+
+  /// 扫描没有得到可播放的视频时，先退回本页再提示，
+  /// 避免提示被刚刚打开的播放页遮挡。
+  void _leavePlayerAndWarn(
+    String message, {
+    Color backgroundColor = Colors.red,
+  }) {
+    if (!mounted) return;
+    final navigator = Navigator.of(context);
+    if (navigator.canPop()) navigator.pop();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: backgroundColor,
+        duration: const Duration(seconds: 3),
+      ),
+    );
   }
 
   Future<List<VideoItem>> _scanFolder(
@@ -2246,4 +2281,9 @@ class _ShareSourcePick {
   final LanDevice? device;
 
   const _ShareSourcePick(this.device);
+}
+
+/// 一次「扫描并播放」流程的中止标记。
+class _ScanToken {
+  bool aborted = false;
 }

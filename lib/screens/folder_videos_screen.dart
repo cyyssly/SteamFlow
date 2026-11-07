@@ -219,7 +219,7 @@ class _FolderVideosScreenState extends State<FolderVideosScreen>
     unawaited(_bootstrapBatches());
   }
 
-  /// 键盘快捷键：F11 切换全屏，ESC 返回文件夹列表
+  /// 键盘快捷键：Enter 从头播放，F11 切换全屏，ESC 返回文件夹列表
   ///
   /// [HardwareKeyboard] 会无条件调用所有已注册的 handler，而播放页也注册了
   /// F11/ESC，因此这里必须确认本页位于最上层，否则同一次按键会被两页各处理
@@ -229,6 +229,13 @@ class _FolderVideosScreenState extends State<FolderVideosScreen>
     if (event is! KeyDownEvent) return false;
     if (ModalRoute.of(context)?.isCurrent != true) return false;
     final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter) {
+      // 加载（扫描）期间或暂无可播放视频时，重复按 Enter 直接忽略
+      if (_isLoading || _items.isEmpty) return true;
+      _startPlaybackFrom(0);
+      return true;
+    }
     if (key == LogicalKeyboardKey.f11) {
       _toggleFullscreen();
       return true;
