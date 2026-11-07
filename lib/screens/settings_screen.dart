@@ -982,6 +982,7 @@ class SettingsScreen extends StatelessWidget {
     final l10n = AppLocalizations.of(context);
     final shortcuts = [
       (l10n.spaceKey, l10n.playPause),
+      ('Enter', l10n.startPlay),
       ('←', l10n.previous),
       ('→', l10n.next),
       ('↑', l10n.zoomIn),
