@@ -668,6 +668,22 @@ class AppLocalizations {
       _t('上次使用的目录', 'Last used folder', '上次使用的目錄');
   String get changeDestination => _t('更改目录', 'Change Folder', '更改目錄');
   String get startCopy => _t('开始复制', 'Start Copy', '開始複製');
+  String get replaceFile => _t('替换', 'Replace', '取代');
+  String get skipFile => _t('跳过', 'Skip', '略過');
+  String get replaceAll => _t('全部替换', 'Replace All', '全部取代');
+  String get skipAll => _t('全部跳过', 'Skip All', '全部略過');
+  String get replaceThis => _t('替换本文件', 'Replace This', '取代本檔案');
+  String get skipThis => _t('跳过本文件', 'Skip This', '略過本檔案');
+  String conflictSingle(String name) => _t(
+    '目标位置已存在同名文件「$name」，是否替换？',
+    '"$name" already exists at the destination. Replace it?',
+    '目標位置已存在同名檔案「$name」，是否取代？',
+  );
+  String conflictBatch(int conflicts, int total) => _t(
+    '本次共 $total 个视频，其中 $conflicts 个在目标位置存在同名文件。',
+    '$conflicts of $total videos already exist at the destination.',
+    '本次共 $total 個視頻，其中 $conflicts 個在目標位置存在同名檔案。',
+  );
 
   // 桌面端托盘
   String get trayShowWindow => _t('显示主界面', 'Show Window', '顯示主界面');

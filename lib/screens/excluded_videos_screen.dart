@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:steam_flow/models/video_item.dart';
 import 'package:steam_flow/providers/settings_provider.dart';
+import 'package:steam_flow/services/copy_conflict_service.dart';
 import 'package:steam_flow/services/directory_picker_service.dart';
 import 'package:steam_flow/services/fullscreen_service.dart';
 import 'package:steam_flow/services/video_scan_service.dart';
@@ -210,10 +211,29 @@ class _ExcludedVideosScreenState extends State<ExcludedVideosScreen>
     final result = await _pickDestination();
     if (result == null) return;
     if (!mounted) return;
-    final ok = await MediaStoreService.moveFiles(result, [item.path]);
+
+    final loc = AppLocalizations.of(context);
+    // 目标已有同名文件时由用户决定是否替换
+    final existing = await MediaStoreService.existingNames(result, {item.name});
+    if (!mounted) return;
+    final plan = await CopyConflictService.resolveConflicts(
+      context,
+      title: loc.moveTo,
+      names: [item.name],
+      existing: existing,
+      batch: false,
+    );
+    if (!mounted || plan.cancelled || plan.skip.contains(item.name)) return;
+
+    final ok = await MediaStoreService.moveFiles(
+      result,
+      [item.path],
+      displayNames: [item.name],
+      overwriteNames: plan.replace,
+    );
     if (!mounted) return;
     if (!ok) {
-      _showSnack(AppLocalizations.of(context).moveFailed);
+      _showSnack(loc.moveFailed);
       return;
     }
     final settings = Provider.of<SettingsProvider>(context, listen: false);
@@ -226,12 +246,31 @@ class _ExcludedVideosScreenState extends State<ExcludedVideosScreen>
     final result = await _pickDestination();
     if (result == null) return;
     if (!mounted) return;
-    final ok = await MediaStoreService.copyFiles(result, [item.path]);
+
+    final loc = AppLocalizations.of(context);
+    // 目标已有同名文件时由用户决定是否替换
+    final existing = await MediaStoreService.existingNames(result, {item.name});
+    if (!mounted) return;
+    final plan = await CopyConflictService.resolveConflicts(
+      context,
+      title: loc.copyTo,
+      names: [item.name],
+      existing: existing,
+      batch: false,
+    );
+    if (!mounted || plan.cancelled || plan.skip.contains(item.name)) return;
+
+    final ok = await MediaStoreService.copyFiles(
+      result,
+      [item.path],
+      displayNames: [item.name],
+      overwriteNames: plan.replace,
+    );
     if (!mounted) return;
     if (ok) {
-      _showSnack(AppLocalizations.of(context).copySuccess);
+      _showSnack(loc.copySuccess);
     } else {
-      _showSnack(AppLocalizations.of(context).copyFailed);
+      _showSnack(loc.copyFailed);
     }
   }
 
@@ -272,36 +311,87 @@ class _ExcludedVideosScreenState extends State<ExcludedVideosScreen>
     final result = await _pickDestination();
     if (result == null) return;
     if (!mounted) return;
+    final loc = AppLocalizations.of(context);
     final items = List<VideoItem>.from(_excludedItems);
+
+    // 批量操作先统计同名文件，由用户决定全部替换、全部跳过或逐个处理
+    final existing = await MediaStoreService.existingNames(
+      result,
+      items.map((e) => e.name).toSet(),
+    );
+    if (!mounted) return;
+    final plan = await CopyConflictService.resolveConflicts(
+      context,
+      title: loc.moveTo,
+      names: items.map((e) => e.name).toList(),
+      existing: existing,
+      batch: true,
+    );
+    if (!mounted || plan.cancelled) return;
+    final targets = [
+      for (final item in items)
+        if (!plan.skip.contains(item.name)) item,
+    ];
+    if (targets.isEmpty) return;
+
     final ok = await MediaStoreService.moveFiles(
       result,
-      items.map((e) => e.path).toList(),
+      targets.map((e) => e.path).toList(),
+      displayNames: targets.map((e) => e.name).toList(),
+      overwriteNames: plan.replace,
     );
     if (!mounted) return;
     if (!ok) {
-      _showSnack(AppLocalizations.of(context).moveFailed);
+      _showSnack(loc.moveFailed);
       return;
     }
     final settings = Provider.of<SettingsProvider>(context, listen: false);
-    settings.removeExcludedPaths(items.map((e) => e.path).toList());
-    setState(() => _excludedItems.clear());
-    _showSnack(AppLocalizations.of(context).movedAllTo);
+    final movedPaths = targets.map((e) => e.path).toList();
+    settings.removeExcludedPaths(movedPaths);
+    setState(() => _excludedItems.removeWhere(
+      (item) => movedPaths.contains(item.path),
+    ));
+    _showSnack(loc.movedAllTo);
   }
 
   Future<void> _copyAll() async {
     final result = await _pickDestination();
     if (result == null) return;
     if (!mounted) return;
+    final loc = AppLocalizations.of(context);
     final items = List<VideoItem>.from(_excludedItems);
+
+    // 批量操作先统计同名文件，由用户决定全部替换、全部跳过或逐个处理
+    final existing = await MediaStoreService.existingNames(
+      result,
+      items.map((e) => e.name).toSet(),
+    );
+    if (!mounted) return;
+    final plan = await CopyConflictService.resolveConflicts(
+      context,
+      title: loc.copyTo,
+      names: items.map((e) => e.name).toList(),
+      existing: existing,
+      batch: true,
+    );
+    if (!mounted || plan.cancelled) return;
+    final targets = [
+      for (final item in items)
+        if (!plan.skip.contains(item.name)) item,
+    ];
+    if (targets.isEmpty) return;
+
     final ok = await MediaStoreService.copyFiles(
       result,
-      items.map((e) => e.path).toList(),
+      targets.map((e) => e.path).toList(),
+      displayNames: targets.map((e) => e.name).toList(),
+      overwriteNames: plan.replace,
     );
     if (!mounted) return;
     if (ok) {
-      _showSnack(AppLocalizations.of(context).copiedAllTo);
+      _showSnack(loc.copiedAllTo);
     } else {
-      _showSnack(AppLocalizations.of(context).copyFailed);
+      _showSnack(loc.copyFailed);
     }
   }
 

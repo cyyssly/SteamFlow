@@ -777,7 +777,7 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
   }
 
   /// 把本地文件夹按条目归并：
-  /// - 移动端：所有同名的相册归为一个条目
+  /// - 移动端：所有同名的相册归为一个条目（名称仅大小写不同也视为同名）
   /// - 桌面端：一个路径一个条目
   List<_LocalFolderGroup> _groupLocalPaths(List<String> paths) {
     if (!Platform.isAndroid) {
@@ -785,11 +785,15 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
     }
     final byName = <String, List<String>>{};
     for (final path in paths) {
-      byName.putIfAbsent(_getLastPathSegment(path), () => []).add(path);
+      // 相册名不区分大小写，避免 Camera 与 camera 被拆成两条
+      byName
+          .putIfAbsent(_getLastPathSegment(path).toLowerCase(), () => [])
+          .add(path);
     }
     return [
       for (final entry in byName.entries)
-        _LocalFolderGroup(entry.key, entry.value),
+        // 展示名沿用组内第一个路径的真实写法
+        _LocalFolderGroup(_getLastPathSegment(entry.value.first), entry.value),
     ];
   }
 
@@ -1397,14 +1401,23 @@ class _FolderSelectionScreenState extends State<FolderSelectionScreen>
       if (!seen.add(path)) continue;
       final parent = _normalizeFolderPath(File(path).parent.path);
       // 手机端只按最后一级目录名归组：同名目录即使路径不同也视为同一目录，
-      // 避免出现两行同名但内容不同的分组
-      final key = Platform.isAndroid ? _getLastPathSegment(parent) : parent;
+      // 名称仅大小写不同也合并，避免出现两行同名但内容不同的分组
+      final key = Platform.isAndroid
+          ? _getLastPathSegment(parent).toLowerCase()
+          : parent;
       groups.putIfAbsent(key, () => []).add(path);
     }
     final entries = groups.entries.toList()
       ..sort((a, b) => a.key.compareTo(b.key));
     return [
-      for (final entry in entries) _ExcludedGroup(entry.key, entry.value),
+      for (final entry in entries)
+        // 展示名沿用组内第一个文件所在目录的真实写法
+        _ExcludedGroup(
+          Platform.isAndroid
+              ? _getLastPathSegment(File(entry.value.first).parent.path)
+              : entry.key,
+          entry.value,
+        ),
     ];
   }
 

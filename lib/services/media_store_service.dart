@@ -317,18 +317,65 @@ foreach (\$p in \$paths) {
     }
   }
 
+  /// 查询 [names] 中哪些文件名已存在于目标目录。
+  ///
+  /// Android 的目标可能是 SAF tree uri，Dart 端无法直接访问，
+  /// 需由原生端列出目录子项后比对；桌面端直接检查文件是否存在。
+  static Future<Set<String>> existingNames(
+    String destination,
+    Set<String> names,
+  ) async {
+    if (names.isEmpty) return <String>{};
+    if (Platform.isAndroid) {
+      try {
+        final result = await _channel.invokeMethod('existingFileNames', {
+          'destinationUri': destination,
+          'names': names.toList(),
+        });
+        if (result is List) {
+          return result.map((e) => e.toString()).toSet();
+        }
+        return <String>{};
+      } catch (e) {
+        debugPrint('[MediaStoreService] existingFileNames failed: $e');
+        return <String>{};
+      }
+    }
+    final existing = <String>{};
+    // Windows 文件系统不区分大小写，A.mp4 也会覆盖 a.mp4
+    final caseInsensitive = Platform.isWindows;
+    String keyOf(String name) => caseInsensitive ? name.toLowerCase() : name;
+    final wanted = {for (final name in names) keyOf(name): name};
+    try {
+      // 批量操作时文件可能很多，一次列目录比逐个 stat 更快
+      await for (final entity in Directory(destination).list()) {
+        final actual = entity.path.split(Platform.pathSeparator).last;
+        final requested = wanted[keyOf(actual)];
+        if (requested != null) existing.add(requested);
+      }
+    } catch (_) {}
+    return existing;
+  }
+
   /// 把 [paths] 中的文件复制到 [destinationUri]（SAF tree uri）。
+  ///
+  /// [displayNames] 与 [paths] 一一对应，用于指定写入后的文件名；
+  /// [overwriteNames] 中的同名文件会先被删除再写入，而不是由系统改名。
   /// 返回 true 表示全部成功（或列表为空）。
   static Future<bool> copyFiles(
     String destinationUri,
-    List<String> paths,
-  ) async {
+    List<String> paths, {
+    List<String>? displayNames,
+    Set<String> overwriteNames = const {},
+  }) async {
     if (paths.isEmpty) return true;
     if (Platform.isAndroid) {
       try {
         final result = await _channel.invokeMethod('copyFiles', {
           'paths': paths,
           'destinationUri': destinationUri,
+          'displayNames': displayNames,
+          'overwriteNames': overwriteNames.toList(),
         });
         return result == true;
       } catch (e) {
@@ -338,10 +385,11 @@ foreach (\$p in \$paths) {
     }
     // 非 Android（桌面端）：直接文件复制
     var allOk = true;
-    for (final path in paths) {
+    for (var i = 0; i < paths.length; i++) {
+      final path = paths[i];
       try {
         final file = File(path);
-        final name = path.split(Platform.pathSeparator).last;
+        final name = displayNames?[i] ?? path.split(Platform.pathSeparator).last;
         await file.copy('$destinationUri${Platform.pathSeparator}$name');
       } catch (_) {
         allOk = false;
@@ -351,17 +399,23 @@ foreach (\$p in \$paths) {
   }
 
   /// 把 [paths] 中的文件移动到 [destinationUri]（SAF tree uri）。
+  ///
+  /// [displayNames]、[overwriteNames] 含义与 [copyFiles] 相同。
   /// 返回 true 表示全部成功（或列表为空）。
   static Future<bool> moveFiles(
     String destinationUri,
-    List<String> paths,
-  ) async {
+    List<String> paths, {
+    List<String>? displayNames,
+    Set<String> overwriteNames = const {},
+  }) async {
     if (paths.isEmpty) return true;
     if (Platform.isAndroid) {
       try {
         final result = await _channel.invokeMethod('moveFiles', {
           'paths': paths,
           'destinationUri': destinationUri,
+          'displayNames': displayNames,
+          'overwriteNames': overwriteNames.toList(),
         });
         return result == true;
       } catch (e) {
@@ -371,10 +425,11 @@ foreach (\$p in \$paths) {
     }
     // 非 Android（桌面端）：复制后删除源文件
     var allOk = true;
-    for (final path in paths) {
+    for (var i = 0; i < paths.length; i++) {
+      final path = paths[i];
       try {
         final file = File(path);
-        final name = path.split(Platform.pathSeparator).last;
+        final name = displayNames?[i] ?? path.split(Platform.pathSeparator).last;
         await file.copy('$destinationUri${Platform.pathSeparator}$name');
         await file.delete();
       } catch (_) {

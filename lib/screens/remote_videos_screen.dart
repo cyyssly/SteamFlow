@@ -437,11 +437,22 @@ class _RemoteVideosScreenState extends State<RemoteVideosScreen>
     final destination = await RemoteCopyService.resolveDestination(context);
     if (destination == null || !mounted) return;
 
+    // 目标已有同名文件时由用户决定是否替换
+    final conflict = await RemoteCopyService.resolveConflict(
+      context,
+      item,
+      destination,
+    );
+    if (!mounted || conflict == null) return;
+    final name = RemoteCopyService.fileNameFor(item);
+    if (conflict.cancelled || conflict.skip.contains(name)) return;
+
     setState(() => _copyingKey = item.key);
     final status = await RemoteCopyService.copyToLocal(
       context,
       item,
       destination,
+      overwrite: conflict.replace.contains(name),
     );
     if (!mounted) return;
     setState(() => _copyingKey = null);

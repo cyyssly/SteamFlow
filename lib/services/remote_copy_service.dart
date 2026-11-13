@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import 'package:steam_flow/l10n/app_localizations.dart';
 import 'package:steam_flow/models/video_item.dart';
 import 'package:steam_flow/providers/settings_provider.dart';
+import 'package:steam_flow/services/copy_conflict_service.dart';
 import 'package:steam_flow/services/directory_picker_service.dart';
 import 'package:steam_flow/services/lan_client_service.dart';
 import 'package:steam_flow/services/media_store_service.dart';
@@ -119,21 +120,44 @@ class RemoteCopyService {
   static Future<RemoteCopyStatus> copyToLocal(
     BuildContext context,
     VideoItem item,
-    String destination,
-  ) async {
+    String destination, {
+    bool overwrite = false,
+  }) async {
     if (_copying) return RemoteCopyStatus.busy;
     _copying = true;
     try {
-      return await _copyToLocalInternal(context, item, destination);
+      return await _copyToLocalInternal(context, item, destination, overwrite);
     } finally {
       _copying = false;
     }
+  }
+
+  /// 检查目标目录是否已有同名文件，并让用户决定是否替换。
+  ///
+  /// 返回 null 表示无需处理或用户取消；否则由调用方按结果决定是否复制。
+  static Future<CopyConflictPlan?> resolveConflict(
+    BuildContext context,
+    VideoItem item,
+    String destination,
+  ) async {
+    final name = fileNameFor(item);
+    final existing = await MediaStoreService.existingNames(destination, {name});
+    if (!context.mounted) return null;
+    final plan = await CopyConflictService.resolveConflicts(
+      context,
+      title: AppLocalizations.of(context).lanCopyToLocal,
+      names: [name],
+      existing: existing,
+      batch: false,
+    );
+    return plan;
   }
 
   static Future<RemoteCopyStatus> _copyToLocalInternal(
     BuildContext context,
     VideoItem item,
     String destination,
+    bool overwrite,
   ) async {
     final loc = AppLocalizations.of(context);
     final progress = ValueNotifier<(int, int)>((0, 0));
@@ -212,7 +236,12 @@ class RemoteCopyService {
           status = RemoteCopyStatus.failed;
           break;
         case DownloadStatus.success:
-          final saved = await _saveToDestination(item, partFile, destination);
+          final saved = await _saveToDestination(
+            item,
+            partFile,
+            destination,
+            overwrite,
+          );
           tempDir = saved.$2;
           status = saved.$1
               ? RemoteCopyStatus.success
@@ -254,16 +283,26 @@ class RemoteCopyService {
     VideoItem item,
     File partFile,
     String destination,
+    bool overwrite,
   ) async {
+    final name = fileNameFor(item);
     if (Platform.isAndroid) {
       // SAF 只能复制完整文件，先转存为原始文件名再交给系统
       final tempDir = await Directory.systemTemp.createTemp('steam_flow_copy_');
-      final staged = File('${tempDir.path}/${_fileNameFor(item)}');
+      final staged = File('${tempDir.path}/$name');
       await partFile.copy(staged.path);
-      final ok = await MediaStoreService.copyFiles(destination, [staged.path]);
+      final ok = await MediaStoreService.copyFiles(
+        destination,
+        [staged.path],
+        displayNames: [name],
+        overwriteNames: overwrite ? {name} : const {},
+      );
       return (ok, tempDir);
     }
-    final target = await uniqueDesktopTarget(destination, _fileNameFor(item));
+    // 覆盖模式下直接使用原文件名，否则生成不冲突的新名称
+    final target = overwrite
+        ? '$destination${Platform.pathSeparator}$name'
+        : await uniqueDesktopTarget(destination, name);
     await partFile.copy(target);
     return (true, null);
   }
@@ -283,7 +322,7 @@ class RemoteCopyService {
   }
 
   /// 取只含文件名的安全名称，避免远端返回的路径片段被拼进目标路径
-  static String _fileNameFor(VideoItem item) {
+  static String fileNameFor(VideoItem item) {
     final name = item.name.split(RegExp(r'[\\/]')).last;
     if (name.isEmpty || name == '.' || name == '..') {
       return 'steam_flow_${DateTime.now().microsecondsSinceEpoch}.video';

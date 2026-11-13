@@ -670,25 +670,88 @@ class _PlayerScreenState extends State<PlayerScreen>
         ? PlaybackProgressService.instance.positionFor(video.key)
         : null;
     // 本机文件用路径、共享视频用 HTTP 地址，media_kit 会自动识别协议
-    unawaited(
-      _player
-          .open(Media(video.playbackUrl), play: slideProvider.isPlaying)
-          .then((_) {
-            if (!mounted || _openPath != video.key) return;
-            // 换片后保持当前倍速（个别播放内核会在打开新文件时重置速度）
-            if (_playbackRate != 1.0) {
-              unawaited(_player.setRate(_playbackRate).catchError((_) {}));
-            }
-            // 时长未就绪时 seek 会被加载流程覆盖，先挂起、等 duration 事件再跳转
-            _pendingResumeSeek = resumeAt;
-            _maybeApplyResumeSeek();
-          })
-          .catchError((_) {}),
-    );
+    unawaited(_openMedia(video, resumeAt, slideProvider.isPlaying));
 
     _transitionController.forward(from: 0);
 
     _applyScreenOrientation(settings);
+  }
+
+  /// 打开视频，打开前先按来源应用缓冲参数。
+  Future<void> _openMedia(VideoItem video, Duration? resumeAt, bool play) async {
+    await _applyBufferingOptions(remote: video.isRemote);
+    if (!mounted || _openPath != video.key) return;
+    try {
+      await _player.open(Media(video.playbackUrl), play: play);
+    } catch (_) {
+      return;
+    }
+    if (!mounted || _openPath != video.key) return;
+    // 换片后保持当前倍速（个别播放内核会在打开新文件时重置速度）
+    if (_playbackRate != 1.0) {
+      unawaited(_player.setRate(_playbackRate).catchError((_) {}));
+    }
+    // 时长未就绪时 seek 会被加载流程覆盖，先挂起、等 duration 事件再跳转
+    _pendingResumeSeek = resumeAt;
+    _maybeApplyResumeSeek();
+  }
+
+  /// 按视频来源设置播放内核的缓冲参数。
+  ///
+  /// 共享视频是高码率大文件时，默认 32MiB 的缓存很快被读空：网络一抖动
+  /// 音频输出就会欠载，声音与画面的两条时钟各自往前跑，表现为持续的
+  /// 声画不同步。远端改用更大的内存缓存并放宽网络超时；本地文件恢复
+  /// 默认值，避免白白占用内存。
+  ///
+  /// 注意：缓存欠载后恢复播放所需的等待时间不能太长，否则一旦数据供不上
+  /// 就会变成「播一下、缓冲一下」的周期性停顿，因此把 `cache-pause-wait`
+  /// 压到 1 秒，且不在起播时死等缓存填满。
+  Future<void> _applyBufferingOptions({required bool remote}) async {
+    final platform = _player.platform;
+    if (platform is! NativePlayer) return;
+    final android = Platform.isAndroid;
+    final options = remote
+        ? <String, String>{
+            // 高码率视频写磁盘缓存会和网络读取抢 I/O，改为纯内存缓存
+            'cache-on-disk': 'no',
+            'cache': 'yes',
+            'cache-secs': '20',
+            'cache-pause': 'yes',
+            // 起播不等待缓存填满，避免开头长时间黑屏
+            'cache-pause-initial': 'no',
+            // 欠载后只等 1 秒数据就继续，等待过久会放大成周期性停顿
+            'cache-pause-wait': '1',
+            'demuxer-max-bytes': android ? '96MiB' : '160MiB',
+            'demuxer-max-back-bytes': android ? '32MiB' : '64MiB',
+            'demuxer-readahead-secs': '15',
+            // 音频输出留出余量，网络抖动时不至于欠载后与画面错位。
+            // 手机端走 OpenSL ES，输出延迟上报不准，音频缓冲越大偏差越明显，
+            // 表现为一开播就固定偏一截，因此只保持默认量级。
+            'audio-buffer': android ? '0.2' : '0.5',
+            // 默认 5 秒，局域网瞬时拥塞时太容易断流重连；也不宜过大，
+            // 否则连接卡住时要等很久才会重连
+            'network-timeout': '10',
+          }
+        : <String, String>{
+            'cache': 'auto',
+            'cache-on-disk': 'yes',
+            'cache-secs': '10',
+            'cache-pause': 'yes',
+            'cache-pause-initial': 'no',
+            'cache-pause-wait': '1',
+            'demuxer-max-bytes': '32MiB',
+            'demuxer-max-back-bytes': '32MiB',
+            'demuxer-readahead-secs': '1',
+            'audio-buffer': '0.2',
+            'network-timeout': '5',
+          };
+    for (final entry in options.entries) {
+      try {
+        await platform.setProperty(entry.key, entry.value);
+      } catch (_) {
+        // 旧版播放内核没有该属性时忽略，保持默认行为
+      }
+    }
   }
 
   /// 按工具栏的「单一循环」设置播放器自身的循环模式。
@@ -945,10 +1008,21 @@ class _PlayerScreenState extends State<PlayerScreen>
     final destination = await RemoteCopyService.resolveDestination(context);
     if (!mounted || destination == null) return;
 
+    // 目标已有同名文件时由用户决定是否替换
+    final conflict = await RemoteCopyService.resolveConflict(
+      context,
+      item,
+      destination,
+    );
+    if (!mounted || conflict == null) return;
+    final name = RemoteCopyService.fileNameFor(item);
+    if (conflict.cancelled || conflict.skip.contains(name)) return;
+
     final status = await RemoteCopyService.copyToLocal(
       context,
       item,
       destination,
+      overwrite: conflict.replace.contains(name),
     );
     if (!mounted) return;
     switch (status) {

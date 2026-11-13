@@ -55,6 +55,19 @@ class _SortedCache {
   const _SortedCache(this.videos, this.timestamp);
 }
 
+/// 对外展示的一个共享文件夹条目。
+///
+/// 手机端同名（含仅大小写不同）的相册会合并成一条，[paths] 保留各自
+/// 的真实路径，列表接口通过文件名生成条目 id，原片/缩略图再据此
+/// 还原到具体路径，避免合并后无法读取。
+class _SharedFolder {
+  final String id;
+  final String name;
+  final List<String> paths;
+
+  const _SharedFolder(this.id, this.name, this.paths);
+}
+
 /// 局域网 HTTP 视频服务（只读）。
 ///
 /// 提供设备信息、共享目录列表、分页视频元数据、首帧缩略图与原片。
@@ -88,6 +101,10 @@ class LanServerService {
 
   /// 已取过帧的视频信息缓存，避免分页时重复解码同一批文件
   final Map<String, VideoFrameInfo?> _frameCache = {};
+
+  /// 条目内的「视频标识 → 绝对路径」映射（按条目签名缓存），
+  /// 合并多个同名相册后仍能还原到各自的真实路径
+  final Map<String, Map<String, String>> _idPathCache = {};
 
   bool get isRunning => _server != null;
 
@@ -141,6 +158,7 @@ class LanServerService {
     _folderCache.clear();
     _sortCache.clear();
     _frameCache.clear();
+    _idPathCache.clear();
     await server?.close(force: true);
   }
 
@@ -189,7 +207,8 @@ class LanServerService {
       'id': _deviceId,
       'name': _deviceName,
       'port': _port,
-      'folders': _folderPaths?.call().length ?? 0,
+      // 与共享列表保持一致：手机端同名相册已合并为一条
+      'folders': _sharedFolders().length,
       'platform': Platform.operatingSystem,
       // 允许远端执行的操作，客户端据此决定按钮是否可用
       'rx': _remoteExcludeEnabled?.call() ?? false,
@@ -197,16 +216,55 @@ class LanServerService {
     };
   }
 
-  Future<List<Map<String, Object?>>> _foldersJson() async {
+  /// 把本机共享文件夹整理成对外条目。
+  ///
+  /// 手机端同名（含仅大小写不同）的相册合并为一条；桌面端一个路径一条。
+  List<_SharedFolder> _sharedFolders() {
     final paths = _folderPaths?.call() ?? const <String>[];
-    final result = <Map<String, Object?>>[];
+    if (paths.isEmpty) return const [];
+    if (!Platform.isAndroid) {
+      return [
+        for (final path in paths)
+          _SharedFolder(folderIdFor(path), _folderName(path), [path]),
+      ];
+    }
+    final byName = <String, List<String>>{};
     for (final path in paths) {
-      final videos = await _videosForPath(path);
+      byName.putIfAbsent(_folderName(path).toLowerCase(), () => []).add(path);
+    }
+    return [
+      for (final entry in byName.entries)
+        // 展示名与 id 沿用组内第一个路径，保证已保存的共享选择仍能命中
+        _SharedFolder(
+          folderIdFor(entry.value.first),
+          _folderName(entry.value.first),
+          entry.value,
+        ),
+    ];
+  }
+
+  Future<List<Map<String, Object?>>> _foldersJson() async {
+    final result = <Map<String, Object?>>[];
+    for (final folder in _sharedFolders()) {
+      final videos = await _videosForFolder(folder);
       result.add({
-        'id': folderIdFor(path),
-        'name': _folderName(path),
+        'id': folder.id,
+        'name': folder.name,
         'count': videos.length,
       });
+    }
+    return result;
+  }
+
+  /// 条目内所有目录的视频；合并了多个同名相册时按完整路径去重
+  Future<List<VideoItem>> _videosForFolder(_SharedFolder folder) async {
+    if (folder.paths.length == 1) return _videosForPath(folder.paths.first);
+    final seen = <String>{};
+    final result = <VideoItem>[];
+    for (final path in folder.paths) {
+      for (final item in await _videosForPath(path)) {
+        if (seen.add(item.path)) result.add(item);
+      }
     }
     return result;
   }
@@ -218,10 +276,81 @@ class LanServerService {
       return cached.videos;
     }
     final videos = await _scanFolder(folder);
-    // 目录内容变化后，旧的排序结果不再有效
+    // 目录内容变化后，旧的排序与标识结果不再有效
     _sortCache.removeWhere((key, _) => key.startsWith('$folder|'));
+    _idPathCache.clear();
     _folderCache[folder] = _FolderCache(videos, DateTime.now());
     return videos;
+  }
+
+  /// 条目内「视频标识 -> 绝对路径」映射，按最近一次扫描结果生成。
+  ///
+  /// 合并条目的标识带目录序号（`i:相对路径`），序号直接来自视频所属的
+  /// 共享目录，不依赖路径前缀比较，因此 MediaStore 返回的路径写法与
+  /// 相册路径不一致时也能还原回同一个文件。
+  Future<Map<String, String>> _idsForFolder(_SharedFolder folder) async {
+    final signature = _folderSignature(folder);
+    final cached = _idPathCache[signature];
+    if (cached != null) return cached;
+
+    final result = <String, String>{};
+    for (var i = 0; i < folder.paths.length; i++) {
+      final root = folder.paths[i];
+      for (final item in await _videosForPath(root)) {
+        final relative = _relativeTo(root, item.path);
+        if (relative.isEmpty) continue;
+        result[folder.paths.length == 1 ? relative : '$i:$relative'] =
+            item.path;
+      }
+    }
+    _idPathCache[signature] = result;
+    return result;
+  }
+
+  /// 条目签名：标识分配相关因素（标识与包含的目录）变化时重建映射
+  static String _folderSignature(_SharedFolder folder) =>
+      '${folder.id}|${folder.paths.join('|')}';
+
+  /// 根据条目 id 与视频 id 还原到绝对路径
+  Future<String?> _resolveVideo(_SharedFolder folder, String? id) async {
+    if (id == null || id.isEmpty) return null;
+
+    // 快路径：标识本身就能还原成路径（单个目录为相对路径，合并条目为
+    // `序号:相对路径`）。播放期间的每个 Range 请求都会调用这里，而映射
+    // 缓存 60 秒就会过期；若每次都触发整目录扫描（手机端还要查询
+    // MediaStore），服务端会短暂停止发送数据，播放器随即耗尽缓存，
+    // 表现为周期性缓冲停顿。
+    final direct = _directPathFor(folder, id);
+    if (direct != null && File(direct).existsSync()) return direct;
+
+    final known = (await _idsForFolder(folder))[id];
+    if (known != null) return known;
+
+    // 兼容不带序号的旧标识：优先选择文件确实存在的目录
+    String? fallback;
+    for (final root in folder.paths) {
+      final resolved = _resolveWithin(root, id);
+      if (resolved == null) continue;
+      if (File(resolved).existsSync()) return resolved;
+      fallback ??= resolved;
+    }
+    return fallback;
+  }
+
+  /// 把标识直接拼成绝对路径（不做目录扫描，也不校验是否存在）。
+  ///
+  /// 单个目录的标识就是相对路径；合并条目的标识是 `序号:相对路径`。
+  static String? _directPathFor(_SharedFolder folder, String id) {
+    if (folder.paths.length == 1) {
+      return _resolveWithin(folder.paths.first, id);
+    }
+    final separator = id.indexOf(':');
+    if (separator <= 0) return null;
+    final index = int.tryParse(id.substring(0, separator));
+    if (index == null || index < 0 || index >= folder.paths.length) {
+      return null;
+    }
+    return _resolveWithin(folder.paths[index], id.substring(separator + 1));
   }
 
   Future<List<VideoItem>> _scanFolder(String folder) async {
@@ -283,17 +412,20 @@ class LanServerService {
   /// 不传 `sort` 时保持目录扫描的默认顺序。
   /// 随机排序用 `seed` 保证同一次浏览的各页顺序一致。
   Future<_SortedCache> _videosForServe(
-    String root, {
+    _SharedFolder folder, {
     String? sort,
     required String order,
     required String seed,
   }) async {
-    final videos = await _videosForPath(root);
+    final videos = await _videosForFolder(folder);
     if (sort == null || sort.isEmpty) {
       return _SortedCache(videos, DateTime.now());
     }
 
-    final key = '$root|$sort|$order|$seed';
+    // 单目录条目沿用目录路径作缓存键，合并条目用条目标识
+    final key =
+        '${folder.paths.length == 1 ? folder.paths.first : folder.id}'
+        '|$sort|$order|$seed';
     final cached = _sortCache[key];
     if (cached != null) {
       if (DateTime.now().difference(cached.timestamp) < _scanCacheDuration) {
@@ -369,12 +501,18 @@ class LanServerService {
     final page = videos.skip(offset).take(limit).toList();
     final frameInfos = await _frameInfosForPage(page);
 
+    final ids = await _idsForFolder(root);
+    final idByPath = <String, String>{};
+    for (final entry in ids.entries) {
+      idByPath[entry.value] = entry.key;
+    }
+
     final itemsJson = <Map<String, Object?>>[];
     for (var i = 0; i < page.length; i++) {
       final item = page[i];
       final info = frameInfos[i];
       itemsJson.add({
-        'id': _relativeTo(root, item.path),
+        'id': idByPath[item.path] ?? _relativeTo(root.paths.first, item.path),
         'name': item.name,
         'size': item.sizeBytes,
         'mtime': item.modifiedTime?.millisecondsSinceEpoch,
@@ -451,7 +589,7 @@ class LanServerService {
       await response.close();
       return;
     }
-    final fullPath = _resolveWithin(root, uri.queryParameters['id'] ?? '');
+    final fullPath = await _resolveVideo(root, uri.queryParameters['id']);
     if (fullPath == null) {
       response.statusCode = HttpStatus.forbidden;
       await response.close();
@@ -582,7 +720,7 @@ class LanServerService {
       await response.close();
       return;
     }
-    final fullPath = _resolveWithin(root, uri.queryParameters['id'] ?? '');
+    final fullPath = await _resolveVideo(root, uri.queryParameters['id']);
     if (fullPath == null) {
       response.statusCode = HttpStatus.forbidden;
       await response.close();
@@ -667,11 +805,11 @@ class LanServerService {
       return;
     }
 
-    final root = _folderById(uri.queryParameters['folder']);
-    final fullPath = root == null
+    final folder = _folderById(uri.queryParameters['folder']);
+    final fullPath = folder == null
         ? null
-        : _resolveWithin(root, uri.queryParameters['id'] ?? '');
-    if (root == null || fullPath == null) {
+        : await _resolveVideo(folder, uri.queryParameters['id']);
+    if (folder == null || fullPath == null) {
       response.statusCode = HttpStatus.notFound;
       await response.close();
       return;
@@ -683,11 +821,11 @@ class LanServerService {
       return;
     }
 
-    // 只允许排除该共享目录中确实存在的视频
-    final videos = await _videosForPath(root);
-    final relative = _relativeTo(root, fullPath);
+    // 只允许排除该共享条目中确实存在的视频
+    final videos = await _videosForFolder(folder);
+    final normalized = fullPath.replaceAll('\\', '/');
     final exists = videos.any(
-      (item) => _relativeTo(root, item.path) == relative,
+      (item) => item.path.replaceAll('\\', '/') == normalized,
     );
     if (!exists) {
       response.statusCode = HttpStatus.notFound;
@@ -701,8 +839,12 @@ class LanServerService {
         : fullPath;
     _onExcludedPath?.call(storedPath);
     // 排除后目录与排序缓存失效，后续列表立即反映结果
-    _folderCache.remove(root);
-    _sortCache.removeWhere((key, _) => key.startsWith('$root|'));
+    for (final path in folder.paths) {
+      _folderCache.remove(path);
+      _sortCache.removeWhere((key, _) => key.startsWith('$path|'));
+    }
+    _sortCache.removeWhere((key, _) => key.startsWith('${folder.id}|'));
+    _idPathCache.clear();
     await _writeJson(response, {'ok': true});
   }
 
@@ -713,12 +855,19 @@ class LanServerService {
     await response.close();
   }
 
-  /// 根据稳定标识查找共享目录
-  String? _folderById(String? id) {
+  /// 根据标识查找共享条目。
+  ///
+  /// 兼容升级前的旧标识：远端保存的引用可能指向组内非首个同名路径。
+  _SharedFolder? _folderById(String? id) {
     if (id == null || id.isEmpty) return null;
-    final paths = _folderPaths?.call() ?? const <String>[];
-    for (final path in paths) {
-      if (folderIdFor(path) == id) return path;
+    final folders = _sharedFolders();
+    for (final folder in folders) {
+      if (folder.id == id) return folder;
+    }
+    for (final folder in folders) {
+      for (final path in folder.paths) {
+        if (folderIdFor(path) == id) return folder;
+      }
     }
     return null;
   }

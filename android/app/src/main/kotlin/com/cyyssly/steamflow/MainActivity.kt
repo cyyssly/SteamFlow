@@ -57,15 +57,30 @@ class MainActivity : FlutterActivity() {
                     handleDeleteToTrash(paths, result)
                 }
                 "pickDestinationDir" -> pickDestinationDir(result)
+                "existingFileNames" -> {
+                    val destinationUri = call.argument<String>("destinationUri") ?: ""
+                    val names = call.argument<List<String>>("names") ?: emptyList()
+                    result.success(existingFileNames(destinationUri, names))
+                }
                 "copyFiles" -> {
                     val paths = call.argument<List<String>>("paths") ?: emptyList()
                     val destinationUri = call.argument<String>("destinationUri") ?: ""
-                    result.success(copyFilesToDestination(paths, destinationUri))
+                    val displayNames = call.argument<List<String>>("displayNames")
+                    val overwriteNames =
+                        call.argument<List<String>>("overwriteNames")?.toSet() ?: emptySet()
+                    result.success(
+                        copyFilesToDestination(paths, destinationUri, displayNames, overwriteNames)
+                    )
                 }
                 "moveFiles" -> {
                     val paths = call.argument<List<String>>("paths") ?: emptyList()
                     val destinationUri = call.argument<String>("destinationUri") ?: ""
-                    result.success(moveFilesToDestination(paths, destinationUri))
+                    val displayNames = call.argument<List<String>>("displayNames")
+                    val overwriteNames =
+                        call.argument<List<String>>("overwriteNames")?.toSet() ?: emptySet()
+                    result.success(
+                        moveFilesToDestination(paths, destinationUri, displayNames, overwriteNames)
+                    )
                 }
                 else -> result.notImplemented()
             }
@@ -240,9 +255,100 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    /// 查询 [names] 中哪些文件名已存在于目标 SAF 目录。
+    /// 原生端才能访问 tree uri，因此由这里列出子项后比对。
+    /// @return 已存在的文件名（与传入名称的大小写写法保持一致）
+    private fun existingFileNames(
+        destTreeUriString: String,
+        names: List<String>
+    ): List<String> {
+        if (names.isEmpty()) return emptyList()
+        try {
+            val treeUri = Uri.parse(destTreeUriString)
+            val treeDocId = android.provider.DocumentsContract.getTreeDocumentId(treeUri)
+            val childrenUri =
+                android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, treeDocId)
+            val wanted = names.associateBy { it.lowercase() }
+            val existing = mutableSetOf<String>()
+            contentResolver.query(
+                childrenUri,
+                arrayOf(
+                    android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE
+                ),
+                null,
+                null,
+                null
+            )?.use { cursor ->
+                val nameIdx = cursor.getColumnIndex(
+                    android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME
+                )
+                val mimeIdx = cursor.getColumnIndex(
+                    android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE
+                )
+                if (nameIdx < 0) return@use
+                while (cursor.moveToNext()) {
+                    val mime = if (mimeIdx >= 0) cursor.getString(mimeIdx) else null
+                    if (mime == android.provider.DocumentsContract.Document.MIME_TYPE_DIR) continue
+                    val name = cursor.getString(nameIdx) ?: continue
+                    wanted[name.lowercase()]?.let { existing.add(it) }
+                }
+            }
+            return existing.toList()
+        } catch (e: Exception) {
+            android.util.Log.e("SteamFlow", "existingFileNames failed: ${e.message}", e)
+            return emptyList()
+        }
+    }
+
+    /// 在目标目录中按显示名称查找文件文档（用于覆盖写入前删除旧文件）
+    private fun findDocumentUriByName(treeUri: Uri, treeDocId: String, name: String): Uri? {
+        val childrenUri =
+            android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, treeDocId)
+        contentResolver.query(
+            childrenUri,
+            arrayOf(
+                android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE
+            ),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            val idIdx = cursor.getColumnIndex(
+                android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID
+            )
+            val nameIdx = cursor.getColumnIndex(
+                android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME
+            )
+            val mimeIdx = cursor.getColumnIndex(
+                android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE
+            )
+            if (idIdx < 0 || nameIdx < 0) return null
+            while (cursor.moveToNext()) {
+                val mime = if (mimeIdx >= 0) cursor.getString(mimeIdx) else null
+                if (mime == android.provider.DocumentsContract.Document.MIME_TYPE_DIR) continue
+                if (!name.equals(cursor.getString(nameIdx), ignoreCase = true)) continue
+                return android.provider.DocumentsContract.buildDocumentUriUsingTree(
+                    treeUri,
+                    cursor.getString(idIdx)
+                )
+            }
+        }
+        return null
+    }
+
     /// 把文件复制到 SAF tree 目录中
+    /// @param displayNames 写入后的文件名（为空时用源文件名）
+    /// @param overwriteNames 需要覆盖的同名文件（先删除目标中的旧文件再写入）
     /// @return true 表示全部复制成功（或路径为空）
-    private fun copyFilesToDestination(paths: List<String>, destTreeUriString: String): Boolean {
+    private fun copyFilesToDestination(
+        paths: List<String>,
+        destTreeUriString: String,
+        displayNames: List<String>?,
+        overwriteNames: Set<String>
+    ): Boolean {
         if (paths.isEmpty()) return true
         try {
             val treeUri = Uri.parse(destTreeUriString)
@@ -252,13 +358,28 @@ class MainActivity : FlutterActivity() {
             val treeDocId = android.provider.DocumentsContract.getTreeDocumentId(treeUri)
 
             var allOk = true
-            for (path in paths) {
+            for ((index, path) in paths.withIndex()) {
                 try {
-                    val fileName = path.substringAfterLast('/')
+                    val fileName = displayNames
+                        ?.getOrNull(index)
+                        ?.takeIf { it.isNotBlank() }
+                        ?: path.substringAfterLast('/')
                     val destDirUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(
                         treeUri,
                         treeDocId
                     )
+
+                    // 覆盖模式：先删除目标中的同名文件，避免系统自动改名为 "xxx (1)"
+                    if (overwriteNames.contains(fileName)) {
+                        findDocumentUriByName(treeUri, treeDocId, fileName)?.let { oldDocUri ->
+                            runCatching {
+                                android.provider.DocumentsContract.deleteDocument(
+                                    resolver,
+                                    oldDocUri
+                                )
+                            }
+                        }
+                    }
 
                     // 创建新文档（视频类型）
                     val newDocUri = resolver.insert(
@@ -308,9 +429,14 @@ class MainActivity : FlutterActivity() {
     }
 
     /// 把文件移动到 SAF tree 目录中（复制成功后再删除源文件）
-    private fun moveFilesToDestination(paths: List<String>, destTreeUriString: String): Boolean {
+    private fun moveFilesToDestination(
+        paths: List<String>,
+        destTreeUriString: String,
+        displayNames: List<String>?,
+        overwriteNames: Set<String>
+    ): Boolean {
         if (paths.isEmpty()) return true
-        val copied = copyFilesToDestination(paths, destTreeUriString)
+        val copied = copyFilesToDestination(paths, destTreeUriString, displayNames, overwriteNames)
         if (copied) {
             deleteFilesDirectly(paths)
         }
